@@ -1,8 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { springLift } from "@/lib/animations";
-import { cn } from "@/lib/utils"; // need to create this
+import { cn } from "@/lib/utils";
 
 interface GlassCardProps {
   children: React.ReactNode;
@@ -11,22 +10,12 @@ interface GlassCardProps {
   glow?: boolean;
 }
 
-export function GlassCard({
-  children,
-  className,
-  hover,
-  glow,
-}: GlassCardProps) {
+export function GlassCard({ children, className, hover }: GlassCardProps) {
   return (
     <motion.div
-      variants={hover ? springLift : undefined}
-      initial="rest"
-      whileHover={hover ? "hover" : undefined}
-      className={cn(
-        "relative rounded-2xl glass-mask shadow-[inset_0_1px_rgba(255,255,255,0.06)] bg-bg-surface backdrop-blur-[40px] backdrop-saturate-[180%]",
-        glow && "hover:shadow-[0_0_15px_#00ff88]",
-        className,
-      )}
+      whileHover={hover ? { y: -3 } : undefined}
+      transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+      className={cn("mood-card rounded-[2px]", className)}
     >
       {children}
     </motion.div>

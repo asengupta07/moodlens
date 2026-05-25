@@ -41,20 +41,22 @@
     "Western": 1.0
   },
   "last_recommendations": [
-    "The Godfather: Part II",
-    "There Will Be Blood",
-    "Me and Earl and the Dying Girl",
-    "The Sea Inside",
-    "Casino"
+    "Dilwale Dulhania Le Jayenge",
+    "Cool Kids Don't Cry",
+    "Hulchul",
+    "The Four Feathers",
+    "Loving Annabelle"
   ],
   "last_recommendation_scores": {
-    "The Godfather: Part II": 0.9038,
-    "There Will Be Blood": 0.9006,
-    "Me and Earl and the Dying Girl": 0.8993,
-    "The Sea Inside": 0.895,
-    "Casino": 0.894
+    "Dilwale Dulhania Le Jayenge": 1.8121,
+    "Cool Kids Don't Cry": 1.7765,
+    "Hulchul": 1.7735,
+    "The Four Feathers": 1.7729,
+    "Loving Annabelle": 1.7711
   },
-  "last_requested_genres": [],
+  "last_requested_genres": [
+    "Romance"
+  ],
   "preference_events": [
     {
       "type": "like",

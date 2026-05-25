@@ -196,3 +196,6 @@ backend/user_state.json
 backend/models/checkpoints/
 evaluation/metrics.json
 
+backend/embeddings_cache.npy
+
+QUESTIONS.md

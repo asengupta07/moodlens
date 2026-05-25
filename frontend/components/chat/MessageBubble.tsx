@@ -1,33 +1,36 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { fadeUp } from "@/lib/animations";
 import { cn } from "@/lib/utils";
 import { ChatMessage } from "./ChatWindow";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
 
   return (
     <motion.div
-      variants={fadeUp}
-      initial="hidden"
-      animate="visible"
-      className={cn(
-        "flex w-full mt-4",
-        isUser ? "justify-end" : "justify-start",
-      )}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.28 }}
+      className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
     >
       <div
         className={cn(
-          "max-w-[85%] md:max-w-[75%] p-4 rounded-2xl glass-mask",
+          "max-w-[88%] border px-4 py-3 text-[14.5px] leading-7 shadow-[inset_0_1px_0_rgba(242,237,227,0.04)] md:max-w-[78%]",
           isUser
-            ? "bg-accent-purple/20 text-white rounded-br-sm border border-accent-purple/30 shadow-[0_0_15px_rgba(168,85,247,0.15)]"
-            : "bg-white/5 text-white/90 rounded-bl-sm border-l-2 border-l-accent-green border-y border-r border-y-white/5 border-r-white/5",
+            ? "border-[rgba(216,88,74,0.34)] bg-[rgba(216,88,74,0.12)] text-[var(--ink)]"
+            : "border-[var(--rule)] bg-[rgba(242,237,227,0.045)] text-[var(--ink-2)]",
         )}
       >
-        <div className="text-sm md:text-base leading-relaxed whitespace-pre-wrap font-inter">
-          {message.content}
+        <div className="mb-1 font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+          {isUser ? "You" : "MoodLens"}
+        </div>
+        <div className={cn("markdown-body", isUser && "markdown-body-user")}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {message.content || ""}
+          </ReactMarkdown>
         </div>
       </div>
     </motion.div>

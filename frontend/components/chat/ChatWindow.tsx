@@ -26,48 +26,37 @@ export function ChatWindow({
   }, [messages, isLoading]);
 
   return (
-    <div
-      ref={scrollRef}
-      className="flex-1 overflow-y-auto pr-2 scroll-smooth pb-4"
-    >
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
       {messages.length === 0 ? (
-        <div className="h-full flex flex-col items-center justify-center text-center opacity-50 relative pointer-events-none">
-          <div className="w-16 h-16 rounded-full bg-accent-glow blur-3xl absolute" />
+        <div className="flex h-full items-center justify-center text-center">
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8 }}
-            className="relative z-10"
+            transition={{ duration: 0.5 }}
+            className="max-w-sm"
           >
-            <p className="text-xl font-space-grotesk text-white">
-              Ask me anything...
+            <p className="font-display text-3xl italic text-[var(--ink)]">
+              What are we in the mood for?
             </p>
-            <div className="h-[2px] w-24 mx-auto mt-4 bg-gradient-to-r from-transparent via-accent-purple to-transparent animate-[aurora_3s_infinite]" />
+            <p className="mt-3 text-sm leading-6 text-[var(--clay)]">
+              MoodLens will separate temporary mood signals from permanent taste.
+            </p>
           </motion.div>
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-4 pb-4">
           {messages.map((m) => (
             <MessageBubble key={m.id} message={m} />
           ))}
           {isLoading && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex mt-6 ml-2 gap-1.5"
-            >
-              <span
-                className="w-2 h-2 rounded-full bg-accent-green animate-typing-dot"
-                style={{ animationDelay: "0ms" }}
-              />
-              <span
-                className="w-2 h-2 rounded-full bg-accent-green animate-typing-dot"
-                style={{ animationDelay: "200ms" }}
-              />
-              <span
-                className="w-2 h-2 rounded-full bg-accent-green animate-typing-dot"
-                style={{ animationDelay: "400ms" }}
-              />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-1.5 pl-2 pt-2">
+              {[0, 160, 320].map((delay) => (
+                <span
+                  key={delay}
+                  className="h-2 w-2 rounded-full bg-[var(--wine)] motion-safe:animate-bounce"
+                  style={{ animationDelay: `${delay}ms` }}
+                />
+              ))}
             </motion.div>
           )}
         </div>

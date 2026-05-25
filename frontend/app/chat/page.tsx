@@ -1,19 +1,18 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import type { ElementType } from "react";
 import { GlassNav } from "@/components/ui/GlassNav";
 import { motion, AnimatePresence } from "framer-motion";
 import { pageTransition } from "@/lib/animations";
-import { GlassCard } from "@/components/ui/GlassCard";
 import { ChatWindow, ChatMessage } from "@/components/chat/ChatWindow";
 import { ChatInput } from "@/components/chat/ChatInput";
-import { GlassButton } from "@/components/ui/GlassButton";
 import { GnnVisualizer } from "@/components/chat/GnnVisualizer";
 import { SessionBadge } from "@/components/chat/SessionBadge";
 import { NewMoodButton } from "@/components/chat/NewMoodButton";
 import { UnlearningPanel, DriftEvent } from "@/components/chat/UnlearningPanel";
 import { EmbeddingDriftChart } from "@/components/chat/EmbeddingDriftChart";
-import { MessageSquare, Circle, GitGraph, Trash2, Loader2 } from "lucide-react";
+import { Activity, BrainCircuit, Cpu, GitGraph, Loader2, MessageSquare, Radar, Trash2 } from "lucide-react";
 
 interface GraphData {
   nodes: any[];
@@ -43,6 +42,51 @@ const EMPTY_GRAPH: GraphData = {
   session_count: 0,
   blocked_count: 0,
 };
+
+function SignalCard({
+  icon: Icon,
+  label,
+  title,
+  body,
+  color,
+}: {
+  icon: ElementType;
+  label: string;
+  title: string;
+  body: string;
+  color: string;
+}) {
+  return (
+    <section className="mood-panel p-4">
+      <div className="flex items-start gap-3">
+        <div className="border border-[var(--rule)] p-2" style={{ color }}>
+          <Icon size={17} strokeWidth={1.5} />
+        </div>
+        <div>
+          <div className="font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">{label}</div>
+          <div className="mt-1 text-sm font-medium text-[var(--ink)]">{title}</div>
+          <p className="mt-2 text-xs leading-6 text-[var(--ink-2)]">{body}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MemoryMeter({ label, value, color, caption }: { label: string; value: number; color: string; caption: string }) {
+  const pct = Math.max(0, Math.min(1, value));
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <span className="font-space-grotesk text-[10px] uppercase tracking-[0.1em] text-[var(--clay)]">{label}</span>
+        <span className="font-mono text-[11px]" style={{ color }}>{Math.round(pct * 100)}%</span>
+      </div>
+      <div className="h-2 border border-[var(--rule)] bg-[rgba(242,237,227,0.035)] p-[1px]">
+        <div className="h-full" style={{ width: `${pct * 100}%`, background: color }} />
+      </div>
+      <p className="mt-1 text-[11px] leading-5 text-[var(--clay)]">{caption}</p>
+    </div>
+  );
+}
 
 export default function ChatPage() {
   const [messages, setMessages]             = useState<ChatMessage[]>([]);
@@ -140,7 +184,7 @@ export default function ChatPage() {
       if (!res.ok || !res.body) {
         setMessages(prev =>
           prev.map(m => m.id === assistantId
-            ? { ...m, content: "⚠️ Failed to reach the backend. Make sure the Python server is running on port 8000." }
+            ? { ...m, content: "Failed to reach the backend. Make sure the Python server is running on port 8000." }
             : m
           )
         );
@@ -198,7 +242,7 @@ export default function ChatPage() {
       if (err.name !== "AbortError") {
         setMessages(prev =>
           prev.map(m => m.id === assistantId
-            ? { ...m, content: "⚠️ Connection error. Is the Python backend running on port 8000?" }
+            ? { ...m, content: "Connection error. Is the Python backend running on port 8000?" }
             : m
           )
         );
@@ -262,122 +306,167 @@ export default function ChatPage() {
         initial="initial"
         animate="animate"
         exit="exit"
-        className="h-screen flex flex-col pt-4 overflow-hidden"
+        className="flex h-screen flex-col overflow-hidden bg-[var(--bone)] text-[var(--ink)]"
       >
         <GlassNav />
 
-        <main className="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col lg:flex-row gap-6 mt-4 min-h-0 container">
-          <aside className="hidden lg:flex w-80 flex-col gap-3 overflow-y-auto">
-            <GlassCard className="p-4 flex flex-col gap-3">
+        <main className="wrap grid min-h-0 flex-1 gap-5 py-5 lg:grid-cols-[minmax(0,1fr)_420px]">
+          <section className="mood-card flex min-h-0 flex-col p-4 md:p-5">
+            <div className="mb-4 flex shrink-0 items-center justify-between gap-3 border-b border-[var(--rule)] pb-4">
+              <div>
+                <div className="flex items-center gap-2 font-space-grotesk text-[10px] uppercase tracking-[0.14em] text-[var(--clay)]">
+                  <MessageSquare size={13} />
+                  Conversational recommender
+                </div>
+                <h1 className="font-display mt-1 text-3xl tracking-[-0.01em] text-[var(--ink)]">
+                  MoodLens chat
+                </h1>
+              </div>
+              <button
+                onClick={() => setShowVisualizer(true)}
+                className="tap-highlight flex items-center gap-2 rounded-full border border-[var(--rule-strong)] px-4 py-2 font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--ink-2)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)]"
+              >
+                <GitGraph size={14} className="text-[var(--wine)]" />
+                Live Graph
+              </button>
+            </div>
+
+            <ChatWindow messages={messages} isLoading={isLoading} />
+
+            <div className="mt-3 shrink-0">
+              <ChatInput
+                input={input}
+                handleInputChange={handleInputChange}
+                handleSubmit={handleSubmit}
+                isLoading={isLoading}
+              />
+            </div>
+          </section>
+
+          <aside className="hidden min-h-0 flex-col gap-3 overflow-y-auto lg:flex">
+            <SignalCard
+              icon={BrainCircuit}
+              label="Memory model"
+              title="Two brains, one conversation"
+              body="Blue is long-term taste. Amber is tonight's mood. Red is anything MoodLens has been told to truly forget."
+              color="var(--blue)"
+            />
+
+            <section className="mood-panel p-4">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="eyebrow">Control room</div>
+                <div className="flex items-center gap-2 text-xs text-[var(--ink-2)]">
+                  <span className={`h-2 w-2 rounded-full ${isOnline ? "bg-[var(--green)]" : "bg-[var(--wine)]"}`} />
+                  {isOnline ? "Online" : "Offline"}
+                </div>
+              </div>
               <SessionBadge active={sessionActive} mood={sessionMood} movieCount={sessionCount} />
 
+              <div className="mt-3">
               <NewMoodButton
                 active={sessionActive}
                 movieCount={sessionCount}
                 mood={sessionMood}
                 onCleared={handleNewMoodCleared}
               />
+              </div>
 
-              <GlassButton
-                variant="secondary"
-                className="w-full"
+              <button
+                className="tap-highlight mt-3 flex w-full items-center justify-center gap-2 rounded-full border border-[var(--rule)] px-4 py-3 font-space-grotesk text-[11px] uppercase tracking-[0.14em] text-[var(--ink-2)] transition-colors hover:border-[var(--wine)] hover:text-[var(--wine)] disabled:opacity-50"
                 onClick={handleReset}
                 disabled={isResetting}
               >
                 {isResetting ? (
-                  <span className="flex items-center gap-2 justify-center">
-                    <Loader2 size={14} className="animate-spin" />
-                    Resetting…
-                  </span>
+                  <><Loader2 size={14} className="animate-spin" /> Resetting</>
                 ) : (
-                  <span className="flex items-center gap-2 justify-center">
-                    <Trash2 size={14} />
-                    Full Reset
-                  </span>
+                  <><Trash2 size={14} /> Full Reset</>
                 )}
-              </GlassButton>
+              </button>
+            </section>
 
-              <div className="p-3 bg-white/5 rounded-xl border border-white/10 text-xs font-inter space-y-2">
-                <div className="text-white/40 uppercase tracking-wider text-[10px] font-medium mb-2">Graph State</div>
-                <div className="flex justify-between items-center">
-                  <span className="text-white/60">Liked (permanent)</span>
-                  <span className="text-accent-green font-medium tabular-nums">{stats?.liked_count ?? 0}</span>
+            <section className="mood-panel p-4 text-xs">
+              <div className="mb-3 flex items-center gap-2 font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+                <Activity size={12} /> Live memory telemetry
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="border border-[var(--rule)] p-3">
+                  <div className="font-display text-3xl text-[var(--blue)]">{stats?.liked_count ?? 0}</div>
+                  <div className="mt-1 text-[var(--clay)]">Permanent</div>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-white/60">Session</span>
-                  <span className="text-amber-300 font-medium tabular-nums">{sessionCount}</span>
+                <div className="border border-[var(--rule)] p-3">
+                  <div className="font-display text-3xl text-[var(--amber)]">{sessionCount}</div>
+                  <div className="mt-1 text-[var(--clay)]">Session</div>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-white/60">Blocked</span>
-                  <span className="text-red-400 font-medium tabular-nums">{stats?.blocked_count ?? graphData?.blocked_count ?? 0}</span>
+                <div className="border border-[var(--rule)] p-3">
+                  <div className="font-display text-3xl text-[var(--wine)]">{stats?.blocked_count ?? graphData?.blocked_count ?? 0}</div>
+                  <div className="mt-1 text-[var(--clay)]">Erased</div>
                 </div>
-
-                {stats?.liked_genres && stats.liked_genres.length > 0 && (
-                  <div className="pt-2 border-t border-white/10">
-                    <div className="text-white/40 text-[10px] mb-1.5">Boosted genres</div>
-                    <div className="flex flex-wrap gap-1">
-                      {stats.liked_genres.slice(0, 5).map(g => (
-                        <span key={g} className="px-1.5 py-0.5 bg-accent-green/15 text-accent-green rounded text-[10px]">{g}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {((stats as any)?.blocked_genres?.length > 0 || stats?.disliked_genres?.length > 0) && (
-                  <div className="pt-2 border-t border-white/10">
-                    <div className="text-white/40 text-[10px] mb-1.5">Blocked genres</div>
-                    <div className="flex flex-wrap gap-1">
-                      {[...new Set<string>([...((stats as any)?.blocked_genres ?? []), ...(stats?.disliked_genres ?? [])])].slice(0, 5).map(g => (
-                        <span key={g} className="px-1.5 py-0.5 bg-red-500/15 text-red-400 rounded text-[10px]">{g}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
 
-              <UnlearningPanel lastEvent={lastDrift} />
-
-              <EmbeddingDriftChart permanent={permanentHistory} session={sessionHistory} />
-
-              <div className="mt-1 pt-3 border-t border-white/10 flex items-center gap-3">
-                <div className="relative">
-                  <Circle size={12} className={isOnline ? "text-accent-green fill-accent-green" : "text-red-400 fill-red-400"} />
-                  {isOnline && <div className="absolute inset-0 bg-accent-green blur-[4px] rounded-full animate-pulse" />}
-                </div>
-                <span className="text-sm text-white/70">{isOnline ? "MoodLens Online" : "Backend Offline"}</span>
-              </div>
-            </GlassCard>
-          </aside>
-
-          <section className="flex-1 flex flex-col min-w-0">
-            <GlassCard className="flex-1 flex flex-col p-2 md:p-4 overflow-hidden relative">
-              <div className="flex items-center justify-between mb-3 shrink-0">
-                <div className="flex items-center gap-2 text-white/40 text-xs font-inter">
-                  <MessageSquare size={13} />
-                  <span>MoodLens — Two-Tier Unlearning Recommender</span>
-                </div>
-                <button
-                  onClick={() => setShowVisualizer(true)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-accent-purple/50 text-white/60 hover:text-white transition-all duration-200 text-xs font-inter group"
-                >
-                  <GitGraph size={13} className="text-accent-purple group-hover:scale-110 transition-transform" />
-                  <span>Live Graph</span>
-                  <div className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse ml-0.5" />
-                </button>
-              </div>
-
-              <ChatWindow messages={messages} isLoading={isLoading} />
-
-              <div className="mt-2 shrink-0">
-                <ChatInput
-                  input={input}
-                  handleInputChange={handleInputChange}
-                  handleSubmit={handleSubmit}
-                  isLoading={isLoading}
+              <div className="mt-4 grid gap-4 border-t border-[var(--rule)] pt-4">
+                <MemoryMeter
+                  label="identity weight"
+                  value={Math.min(1, (stats?.liked_count ?? 0) / 8)}
+                  color="var(--blue)"
+                  caption="How much permanent taste has been captured."
+                />
+                <MemoryMeter
+                  label="mood heat"
+                  value={Math.min(1, sessionCount / 8)}
+                  color="var(--amber)"
+                  caption="How strongly this temporary session is shaping recs."
+                />
+                <MemoryMeter
+                  label="erase pressure"
+                  value={Math.min(1, ((stats?.blocked_count ?? graphData?.blocked_count ?? 0) as number) / 8)}
+                  color="var(--wine)"
+                  caption="Hard blocks and permanent dislikes in force."
                 />
               </div>
-            </GlassCard>
-          </section>
+
+              {stats?.liked_genres && stats.liked_genres.length > 0 && (
+                <div className="mt-4 border-t border-[var(--rule)] pt-3">
+                  <div className="mb-2 font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">Boosted genres</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {stats.liked_genres.slice(0, 7).map(g => (
+                      <span key={g} className="border border-[rgba(120,166,200,0.35)] px-2 py-1 text-[10px] text-[var(--blue)]">{g}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {((stats as any)?.blocked_genres?.length > 0 || stats?.disliked_genres?.length > 0) && (
+                <div className="mt-4 border-t border-[var(--rule)] pt-3">
+                  <div className="mb-2 font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">Blocked genres</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[...new Set<string>([...((stats as any)?.blocked_genres ?? []), ...(stats?.disliked_genres ?? [])])].slice(0, 7).map(g => (
+                      <span key={g} className="border border-[rgba(216,88,74,0.42)] px-2 py-1 text-[10px] text-[var(--wine)]">{g}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <SignalCard
+              icon={Radar}
+              label="Plain-English drift"
+              title="When the line jumps, the taste map moved"
+              body="Embedding drift is not a user-facing score. It is a lab trace: how far the recommender's internal coordinates moved after forgetting."
+              color="var(--amber)"
+            />
+
+            <UnlearningPanel lastEvent={lastDrift} />
+
+            <EmbeddingDriftChart permanent={permanentHistory} session={sessionHistory} />
+
+            <SignalCard
+              icon={Cpu}
+              label="Scoring stack"
+              title="LightGCN + semantic filters + hard blocks"
+              body="Recommendations are scored by graph similarity, plot/metadata relevance, genre weights, and explicit erasure filters."
+              color="var(--green)"
+            />
+          </aside>
         </main>
 
         <AnimatePresence>

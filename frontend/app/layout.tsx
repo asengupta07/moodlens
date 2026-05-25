@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
-import { ParticleField } from "@/components/ui/ParticleField";
-import { AuroraOrbs } from "@/components/ui/AuroraOrbs";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const spaceGrotesk = Space_Grotesk({
@@ -11,9 +9,9 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "GNN Movie Recommender",
+  title: "MoodLens",
   description:
-    "A knowledge-graph powered recommendation system that can selectively forget user preferences on request.",
+    "A conversational movie recommender with two-tier machine unlearning for taste and mood.",
 };
 
 export default function RootLayout({
@@ -24,10 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${inter.variable} ${spaceGrotesk.variable} font-sans antialiased text-white selection:bg-accent-green selection:text-bg-base overflow-x-hidden`}
+        className={`${inter.variable} ${spaceGrotesk.variable} font-sans antialiased overflow-x-hidden`}
       >
-        <ParticleField />
-        <AuroraOrbs />
+        <div className="grain" aria-hidden="true" />
         {children}
       </body>
     </html>

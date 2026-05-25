@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { RefreshCw, X, Trash2, Bookmark, Loader2 } from "lucide-react";
+import { Bookmark, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 
 interface SessionSummary {
   movie_count?: number;
@@ -26,10 +26,10 @@ interface Props {
 
 export function NewMoodButton({ active, movieCount, mood, onCleared }: Props) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"discard" | "commit" | null>(null);
 
   const trigger = async (action: "discard" | "commit") => {
-    setBusy(true);
+    setBusy(action);
     try {
       const res = await fetch("/api/new-mood", {
         method: "POST",
@@ -39,7 +39,7 @@ export function NewMoodButton({ active, movieCount, mood, onCleared }: Props) {
       const data = await res.json();
       onCleared(data.embedding_drift ?? null, data.session_summary ?? {});
     } finally {
-      setBusy(false);
+      setBusy(null);
       setOpen(false);
     }
   };
@@ -49,13 +49,14 @@ export function NewMoodButton({ active, movieCount, mood, onCleared }: Props) {
       <button
         onClick={() => setOpen(true)}
         disabled={!active}
-        className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border text-sm transition-all duration-200
-          ${active
-            ? "border-amber-400/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
-            : "border-white/10 bg-white/5 text-white/30 cursor-not-allowed"}`}
+        className={`tap-highlight flex w-full items-center justify-center gap-2 rounded-full px-4 py-3 font-space-grotesk text-[11px] uppercase tracking-[0.14em] transition-colors ${
+          active
+            ? "bg-[var(--wine)] text-[var(--bone)] hover:bg-[var(--ink)]"
+            : "border border-[var(--rule)] bg-[rgba(242,237,227,0.035)] text-[var(--clay-2)]"
+        }`}
       >
         <RefreshCw size={14} />
-        <span>New Mood</span>
+        New Mood
       </button>
 
       <AnimatePresence>
@@ -64,69 +65,84 @@ export function NewMoodButton({ active, movieCount, mood, onCleared }: Props) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
             onClick={(e) => {
               if (e.target === e.currentTarget && !busy) setOpen(false);
             }}
           >
             <motion.div
-              initial={{ scale: 0.92, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.92, opacity: 0 }}
-              className="w-full max-w-md rounded-2xl border border-white/10 bg-bg-base p-6"
+              initial={{ scale: 0.96, opacity: 0, y: 12 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 12 }}
+              className="w-full max-w-xl border border-[var(--rule)] bg-[var(--bone-2)] p-6 shadow-2xl"
             >
-              <div className="flex items-start justify-between mb-4">
+              <div className="mb-6 flex items-start justify-between gap-5">
                 <div>
-                  <h3 className="text-white font-semibold text-lg">End this mood?</h3>
-                  <p className="text-white/50 text-xs mt-1">
-                    Two-tier unlearning. Your decision controls how this session
-                    affects your taste profile.
+                  <div className="eyebrow">Session boundary</div>
+                  <h3 className="font-display mt-2 text-4xl leading-none text-[var(--ink)]">
+                    End this mood?
+                  </h3>
+                  <p className="mt-3 max-w-md text-sm leading-6 text-[var(--ink-2)]">
+                    Choose whether this session becomes part of your permanent taste graph or is erased through Tier II unlearning.
                   </p>
                 </div>
                 <button
                   onClick={() => !busy && setOpen(false)}
-                  className="text-white/40 hover:text-white"
-                  disabled={busy}
+                  className="tap-highlight rounded-full border border-[var(--rule)] p-2 text-[var(--clay)] hover:text-[var(--ink)]"
+                  disabled={!!busy}
+                  aria-label="Close"
                 >
-                  <X size={18} />
+                  <X size={17} />
                 </button>
               </div>
 
-              <div className="rounded-xl bg-white/5 border border-white/10 p-3 mb-5 text-xs space-y-1.5">
-                <div className="flex justify-between text-white/70">
-                  <span>Dominant mood</span>
-                  <span className="text-amber-300 font-medium">
-                    {mood ?? "—"}
-                  </span>
+              <div className="mb-5 grid gap-3 border-y border-[var(--rule)] py-4 text-sm sm:grid-cols-3">
+                <div>
+                  <div className="font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+                    Dominant mood
+                  </div>
+                  <div className="mt-1 text-[var(--amber)]">{mood ?? "Unlabelled"}</div>
                 </div>
-                <div className="flex justify-between text-white/70">
-                  <span>Movies this session</span>
-                  <span className="text-white tabular-nums">{movieCount}</span>
+                <div>
+                  <div className="font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+                    Movies
+                  </div>
+                  <div className="mt-1 font-mono text-[var(--ink)]">{movieCount}</div>
+                </div>
+                <div>
+                  <div className="font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+                    Tier
+                  </div>
+                  <div className="mt-1 text-[var(--ink-2)]">Influence functions</div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <button
                   onClick={() => trigger("discard")}
-                  disabled={busy}
-                  className="flex flex-col items-center gap-1 p-4 rounded-xl border border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-all disabled:opacity-50"
+                  disabled={!!busy}
+                  className="tap-highlight border border-[rgba(216,88,74,0.45)] bg-[rgba(216,88,74,0.10)] p-5 text-left text-[var(--ink)] transition-colors hover:bg-[rgba(216,88,74,0.16)] disabled:opacity-50"
                 >
-                  {busy ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} />}
-                  <span className="text-sm font-medium">Forget this mood</span>
-                  <span className="text-[10px] text-red-300/70 text-center">
-                    Tier 2 erase via influence functions
-                  </span>
+                  <div className="flex items-center gap-2 font-space-grotesk text-[11px] uppercase tracking-[0.14em] text-[var(--wine)]">
+                    {busy === "discard" ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                    Forget this mood
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-[var(--ink-2)]">
+                    Reverse the session influence and clear the mood graph.
+                  </p>
                 </button>
                 <button
                   onClick={() => trigger("commit")}
-                  disabled={busy}
-                  className="flex flex-col items-center gap-1 p-4 rounded-xl border border-blue-500/40 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 transition-all disabled:opacity-50"
+                  disabled={!!busy}
+                  className="tap-highlight border border-[rgba(120,166,200,0.45)] bg-[rgba(120,166,200,0.10)] p-5 text-left text-[var(--ink)] transition-colors hover:bg-[rgba(120,166,200,0.16)] disabled:opacity-50"
                 >
-                  {busy ? <Loader2 size={18} className="animate-spin" /> : <Bookmark size={18} />}
-                  <span className="text-sm font-medium">Keep in my profile</span>
-                  <span className="text-[10px] text-blue-300/70 text-center">
-                    Fine-tune LightGCN with these edges
-                  </span>
+                  <div className="flex items-center gap-2 font-space-grotesk text-[11px] uppercase tracking-[0.14em] text-[var(--blue)]">
+                    {busy === "commit" ? <Loader2 size={16} className="animate-spin" /> : <Bookmark size={16} />}
+                    Keep in my profile
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-[var(--ink-2)]">
+                    Merge the session interactions into permanent preference state.
+                  </p>
                 </button>
               </div>
             </motion.div>

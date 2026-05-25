@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Sparkles, Moon } from "lucide-react";
+import { Moon, Sparkles } from "lucide-react";
 
 interface Props {
   active: boolean;
@@ -12,21 +12,28 @@ interface Props {
 export function SessionBadge({ active, mood, movieCount }: Props) {
   if (!active) {
     return (
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/10 bg-white/5 text-white/40 text-xs">
-        <Moon size={12} />
-        <span>No active mood</span>
+      <div className="flex items-center justify-between border border-[var(--rule)] bg-[rgba(242,237,227,0.035)] px-4 py-3 text-xs text-[var(--clay)]">
+        <span className="flex items-center gap-2">
+          <Moon size={13} /> No active mood
+        </span>
+        <span className="font-space-grotesk uppercase tracking-[0.12em]">0 movies</span>
       </div>
     );
   }
+
   return (
     <motion.div
-      initial={{ scale: 0.9, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-amber-400/30 bg-amber-400/10 text-amber-300 text-xs motion-safe:animate-pulse"
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-center justify-between border border-[rgba(216,168,74,0.36)] bg-[rgba(216,168,74,0.10)] px-4 py-3 text-xs text-[var(--ink)]"
     >
-      <Sparkles size={12} className="text-amber-300" />
-      <span className="font-medium">{mood ? `${mood} mood` : "Mood active"}</span>
-      <span className="text-amber-200/70">· {movieCount} movies</span>
+      <span className="flex items-center gap-2">
+        <Sparkles size={13} className="text-[var(--amber)]" />
+        <span className="font-medium">{mood ? `${mood} mood` : "Mood active"}</span>
+      </span>
+      <span className="font-space-grotesk uppercase tracking-[0.12em] text-[var(--amber)]">
+        {movieCount} movies
+      </span>
     </motion.div>
   );
 }

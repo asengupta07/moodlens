@@ -1,6 +1,6 @@
 "use client";
 
-import { Sparkles, Trash2, History } from "lucide-react";
+import { History, Sparkles, Trash2 } from "lucide-react";
 
 export interface DriftEvent {
   tier: number;
@@ -21,86 +21,98 @@ interface Props {
 }
 
 function fmtDate(s?: string) {
-  if (!s) return "—";
-  try { return new Date(s).toLocaleString(); } catch { return s; }
+  if (!s) return "No event";
+  try {
+    return new Date(s).toLocaleString();
+  } catch {
+    return s;
+  }
 }
 
-function fmtDrift(v?: number) {
-  if (v === undefined || v === null || isNaN(v)) return "—";
+function fmt(v?: number) {
+  if (v === undefined || v === null || Number.isNaN(v)) return "-";
   return v.toFixed(4);
 }
 
 export function UnlearningPanel({ lastEvent }: Props) {
   if (!lastEvent) {
     return (
-      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs">
-        <div className="flex items-center gap-2 text-white/40 uppercase tracking-wider text-[10px] font-medium mb-2">
-          <History size={11} /> Unlearning Panel
+      <section className="mood-panel p-4">
+        <div className="mb-3 flex items-center gap-2 font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+          <History size={12} /> Memory surgery log
         </div>
-        <p className="text-white/40 text-[11px] leading-relaxed">
-          No unlearning events yet. Try "block horror forever" to trigger Tier 1
-          (GNNDelete), or press <strong>New Mood</strong> to trigger Tier 2
-          (influence functions).
+        <p className="text-xs leading-6 text-[var(--ink-2)]">
+          When MoodLens forgets something, this panel explains what changed. Permanent erasure means the model carved out a long-term dislike. Session clearing means tonight's mood was wiped.
         </p>
-      </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+          <Mini label="Tier I" value="Identity" color="var(--wine)" />
+          <Mini label="Tier II" value="Mood" color="var(--amber)" />
+        </div>
+      </section>
     );
   }
+
   const isTier1 = lastEvent.tier === 1;
-  const color = isTier1 ? "text-red-300" : "text-amber-300";
-  const accent = isTier1 ? "border-red-500/30 bg-red-500/5" : "border-amber-400/30 bg-amber-400/5";
   const Icon = isTier1 ? Trash2 : Sparkles;
+  const color = isTier1 ? "var(--wine)" : "var(--amber)";
+
   return (
-    <div className={`rounded-xl border ${accent} p-3 text-xs space-y-2`}>
-      <div className="flex items-center gap-2">
-        <Icon size={13} className={color} />
-        <span className={`font-medium ${color}`}>
+    <section className="mood-panel p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 font-space-grotesk text-[10px] uppercase tracking-[0.12em]" style={{ color }}>
+          <Icon size={13} />
           {isTier1 ? "Permanent erasure" : "Session cleared"}
-        </span>
-        <span className="ml-auto text-white/40 text-[10px]">
+        </div>
+        <span className="font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
           Tier {lastEvent.tier}
         </span>
       </div>
-      <div className="text-white/50 text-[10px]">{fmtDate(lastEvent.timestamp)}</div>
 
-      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/10">
-        <div>
-          <div className="text-white/40 text-[10px]">Cosine drift</div>
-          <div className={`font-mono ${color}`}>{fmtDrift(lastEvent.cosine_distance)}</div>
-        </div>
+      <div className="font-display text-4xl leading-none" style={{ color }}>
+        {fmt(lastEvent.cosine_distance)}
+      </div>
+      <div className="mt-1 text-[11px] text-[var(--clay)]">memory movement score - {fmtDate(lastEvent.timestamp)}</div>
+      <p className="mt-3 text-xs leading-6 text-[var(--ink-2)]">
+        {isTier1
+          ? "This is the size of the embedding shift caused by permanent unlearning. Bigger usually means the forgotten region actually moved."
+          : "This is how much the user vector changed while clearing the temporary mood. It is a before/after trace, not a rating."}
+      </p>
+
+      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--rule)] pt-4 text-xs">
         {isTier1 ? (
           <>
-            <div>
-              <div className="text-white/40 text-[10px]">Movies erased</div>
-              <div className="text-white font-mono">{lastEvent.movies_affected ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-white/40 text-[10px]">Edges removed</div>
-              <div className="text-white font-mono">{lastEvent.edges_removed ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-white/40 text-[10px]">Δ retain−forget</div>
-              <div className="text-white font-mono">
-                {fmtDrift((lastEvent.retain_score ?? 0) - (lastEvent.forget_score ?? 0))}
-              </div>
-            </div>
+            <Metric label="Movies erased" value={lastEvent.movies_affected ?? "-"} />
+            <Metric label="Edges removed" value={lastEvent.edges_removed ?? "-"} />
+            <Metric label="Forget score" value={fmt(lastEvent.forget_score)} />
+            <Metric label="Retain score" value={fmt(lastEvent.retain_score)} />
           </>
         ) : (
           <>
-            <div>
-              <div className="text-white/40 text-[10px]">Mood</div>
-              <div className="text-amber-300">{lastEvent.mood ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-white/40 text-[10px]">Edges</div>
-              <div className="text-white font-mono">{lastEvent.edges_processed ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-white/40 text-[10px]">Mode</div>
-              <div className="text-white capitalize">{lastEvent.mode ?? "—"}</div>
-            </div>
+            <Metric label="Mood" value={lastEvent.mood ?? "-"} />
+            <Metric label="Edges" value={lastEvent.edges_processed ?? "-"} />
+            <Metric label="Mode" value={lastEvent.mode ?? "-"} />
+            <Metric label="Event" value="Influence erase" />
           </>
         )}
       </div>
+    </section>
+  );
+}
+
+function Mini({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="border border-[var(--rule)] p-2">
+      <div className="font-space-grotesk text-[9px] uppercase tracking-[0.1em] text-[var(--clay)]">{label}</div>
+      <div className="mt-1 text-sm" style={{ color }}>{value}</div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <div className="font-space-grotesk text-[10px] uppercase tracking-[0.1em] text-[var(--clay)]">{label}</div>
+      <div className="mt-1 truncate text-[var(--ink)]">{value}</div>
     </div>
   );
 }

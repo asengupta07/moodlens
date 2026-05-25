@@ -14,10 +14,10 @@ interface Props {
   session: Point[];
 }
 
-const WIDTH = 280;
-const HEIGHT = 100;
+const WIDTH = 320;
+const HEIGHT = 112;
 const PAD_X = 24;
-const PAD_Y = 14;
+const PAD_Y = 16;
 
 function buildPath(values: number[]): string {
   if (values.length === 0) return "";
@@ -35,65 +35,76 @@ function buildPath(values: number[]): string {
 export function EmbeddingDriftChart({ permanent, session }: Props) {
   const permVals = permanent.map((p) => p.cosine_distance ?? 0);
   const sessVals = session.map((p) => p.cosine_distance ?? 0);
-
   const permPath = useMemo(() => buildPath(permVals), [permVals]);
   const sessPath = useMemo(() => buildPath(sessVals), [sessVals]);
-
   const empty = permVals.length === 0 && sessVals.length === 0;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-white/40 uppercase tracking-wider text-[10px] font-medium">
-          Embedding drift
+    <section className="mood-panel p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+          Taste movement timeline
         </span>
-        <div className="flex gap-3 text-[10px]">
-          <span className="flex items-center gap-1 text-red-300">
-            <span className="w-2 h-0.5 bg-red-400" /> Tier 1
+        <div className="flex items-center gap-3 font-space-grotesk text-[9px] uppercase tracking-[0.1em]">
+          <span className="flex items-center gap-1 text-[var(--wine)]">
+            <span className="h-px w-4 bg-[var(--wine)]" /> Tier I
           </span>
-          <span className="flex items-center gap-1 text-amber-300">
-            <span className="w-2 h-0.5 bg-amber-400" /> Tier 2
+          <span className="flex items-center gap-1 text-[var(--amber)]">
+            <span className="h-px w-4 bg-[var(--amber)]" /> Tier II
           </span>
         </div>
       </div>
       {empty ? (
-        <p className="text-white/30 text-[11px]">
-          No drift events yet. Trigger Tier 1 or Tier 2 unlearning to see the
-          chart populate.
-        </p>
+        <div>
+          <p className="text-xs leading-6 text-[var(--ink-2)]">
+            No memory movement yet. When the system forgets, this becomes a timeline of how strongly the recommender's internal taste map changed.
+          </p>
+          <div className="mt-3 flex h-16 items-end gap-1 border border-[var(--rule)] bg-[rgba(242,237,227,0.03)] p-2">
+            {[0.22, 0.5, 0.32, 0.74, 0.46, 0.62, 0.28, 0.84, 0.36, 0.58].map((h, i) => (
+              <span
+                key={i}
+                className="flex-1 bg-[var(--clay)] opacity-30"
+                style={{ height: `${h * 100}%` }}
+              />
+            ))}
+          </div>
+        </div>
       ) : (
+        <div>
         <svg width="100%" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="overflow-visible">
-          {/* baseline */}
-          <line
-            x1={PAD_X}
-            x2={WIDTH - PAD_X}
-            y1={HEIGHT - PAD_Y}
-            y2={HEIGHT - PAD_Y}
-            stroke="rgba(255,255,255,0.1)"
-            strokeWidth={1}
-          />
-          {permPath && (
-            <path d={permPath} fill="none" stroke="#f87171" strokeWidth={1.5} />
-          )}
-          {sessPath && (
-            <path d={sessPath} fill="none" stroke="#fbbf24" strokeWidth={1.5} />
-          )}
-          {permVals.map((v, i) => {
-            const stepX = permVals.length > 1 ? (WIDTH - PAD_X * 2) / (permVals.length - 1) : 0;
-            const max = Math.max(0.01, ...permVals);
-            const cx = PAD_X + stepX * i;
-            const cy = HEIGHT - PAD_Y - (v / max) * (HEIGHT - PAD_Y * 2);
-            return <circle key={`p-${i}`} cx={cx} cy={cy} r={2} fill="#f87171" />;
-          })}
-          {sessVals.map((v, i) => {
-            const stepX = sessVals.length > 1 ? (WIDTH - PAD_X * 2) / (sessVals.length - 1) : 0;
-            const max = Math.max(0.01, ...sessVals);
-            const cx = PAD_X + stepX * i;
-            const cy = HEIGHT - PAD_Y - (v / max) * (HEIGHT - PAD_Y * 2);
-            return <circle key={`s-${i}`} cx={cx} cy={cy} r={2} fill="#fbbf24" />;
+          {[0.25, 0.5, 0.75, 1].map((t) => (
+            <line
+              key={t}
+              x1={PAD_X}
+              x2={WIDTH - PAD_X}
+              y1={HEIGHT - PAD_Y - t * (HEIGHT - PAD_Y * 2)}
+              y2={HEIGHT - PAD_Y - t * (HEIGHT - PAD_Y * 2)}
+              stroke="rgba(242,237,227,0.08)"
+              strokeWidth={1}
+            />
+          ))}
+          {permPath && <path d={permPath} fill="none" stroke="var(--wine)" strokeWidth={2} />}
+          {sessPath && <path d={sessPath} fill="none" stroke="var(--amber)" strokeWidth={2} strokeDasharray="5 4" />}
+          {[...permVals.map((v, i) => ({ v, i, c: "var(--wine)" })), ...sessVals.map((v, i) => ({ v, i, c: "var(--amber)", s: sessVals.length }))].map((p, idx) => {
+            const values = p.c === "var(--wine)" ? permVals : sessVals;
+            const stepX = values.length > 1 ? (WIDTH - PAD_X * 2) / (values.length - 1) : 0;
+            const max = Math.max(0.01, ...values);
+            return (
+              <circle
+                key={idx}
+                cx={PAD_X + stepX * p.i}
+                cy={HEIGHT - PAD_Y - (p.v / max) * (HEIGHT - PAD_Y * 2)}
+                r={3}
+                fill={p.c}
+              />
+            );
           })}
         </svg>
+        <p className="mt-2 text-[11px] leading-5 text-[var(--clay)]">
+          Red: permanent profile surgery. Amber: temporary mood clearing.
+        </p>
+        </div>
       )}
-    </div>
+    </section>
   );
 }

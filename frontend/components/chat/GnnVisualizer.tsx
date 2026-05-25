@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { X, Maximize2, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { motion } from "framer-motion";
+import { Brain, CircleHelp, Network, RotateCcw, X } from "lucide-react";
 
 interface GraphNode {
   id: string;
@@ -19,10 +19,6 @@ interface GraphNode {
     | "genre_blocked";
   weight: number;
   interaction?: string;
-  x?: number;
-  y?: number;
-  vx?: number;
-  vy?: number;
 }
 
 interface GraphEdge {
@@ -63,302 +59,114 @@ interface Props {
   onClose: () => void;
 }
 
-const NODE_CONFIG: Record<string, { color: string; radius: number; glow: string; dashed?: boolean }> = {
-  user:           { color: "#00ff88", radius: 28, glow: "#00ff88" },
-  recommended:    { color: "#a855f7", radius: 20, glow: "#a855f7" },
-  liked:          { color: "#38bdf8", radius: 16, glow: "#38bdf8" },
-  movie_liked:    { color: "#38bdf8", radius: 16, glow: "#38bdf8" },
-  movie_session:  { color: "#fbbf24", radius: 16, glow: "#fbbf24", dashed: true },
-  movie_blocked:  { color: "#ef4444", radius: 14, glow: "#ef4444" },
-  erased:         { color: "#ef4444", radius: 14, glow: "#ef4444" },
-  genre:          { color: "#c084fc", radius: 12, glow: "#c084fc" },
-  genre_blocked:  { color: "#ef4444", radius: 12, glow: "#ef4444" },
+type LayoutNode = GraphNode & {
+  x: number;
+  y: number;
+  r: number;
 };
 
-const EDGE_CONFIG: Record<string, { color: string; opacity: number; dashed?: boolean }> = {
-  recommends:           { color: "#a855f7", opacity: 0.8 },
-  liked:                { color: "#38bdf8", opacity: 0.5 },
-  permanent_like:       { color: "#38bdf8", opacity: 0.55 },
-  session_interaction:  { color: "#fbbf24", opacity: 0.55, dashed: true },
-  blocked:              { color: "#ef4444", opacity: 0.3 },
-  erased:               { color: "#ef4444", opacity: 0.3 },
-  has_genre:            { color: "#c084fc", opacity: 0.3 },
-  genre_weight:         { color: "#c084fc", opacity: 0.3 },
+const W = 980;
+const H = 620;
+const USER = { x: 490, y: 315 };
+
+const NODE_CONFIG: Record<string, { color: string; radius: number; label: string; explain: string }> = {
+  user: { color: "#88b38b", radius: 11, label: "You", explain: "The active user profile." },
+  recommended: { color: "#b38dcc", radius: 7, label: "Recommendation", explain: "Movie currently being scored." },
+  liked: { color: "#78a6c8", radius: 7, label: "Permanent like", explain: "Long-term taste signal." },
+  movie_liked: { color: "#78a6c8", radius: 7, label: "Permanent like", explain: "Long-term taste signal." },
+  movie_session: { color: "#d8a84a", radius: 7, label: "Session movie", explain: "Temporary mood signal." },
+  movie_blocked: { color: "#d8584a", radius: 7, label: "Erased / blocked", explain: "Hard filter or unlearn target." },
+  erased: { color: "#d8584a", radius: 7, label: "Erased / blocked", explain: "Hard filter or unlearn target." },
+  genre: { color: "#b38dcc", radius: 6, label: "Genre", explain: "Genre bridge node." },
+  genre_blocked: { color: "#d8584a", radius: 6, label: "Blocked genre", explain: "Genre-level permanent dislike." },
 };
 
-function runForceLayout(nodes: GraphNode[], edges: GraphEdge[], width: number, height: number, iterations: number = 200) {
-  // Initialize positions
-  const positioned = nodes.map((n, i) => ({
-    ...n,
-    x: n.type === "user" ? width / 2 : width / 2 + (Math.random() - 0.5) * width * 0.8,
-    y: n.type === "user" ? height / 2 : height / 2 + (Math.random() - 0.5) * height * 0.8,
-    vx: 0,
-    vy: 0,
-  }));
+const EDGE_CONFIG: Record<string, { color: string; dash?: string; opacity: number }> = {
+  recommends: { color: "#b38dcc", opacity: 0.52 },
+  liked: { color: "#78a6c8", opacity: 0.58 },
+  permanent_like: { color: "#78a6c8", opacity: 0.58 },
+  session_interaction: { color: "#d8a84a", dash: "7 7", opacity: 0.72 },
+  blocked: { color: "#d8584a", dash: "4 7", opacity: 0.72 },
+  erased: { color: "#d8584a", dash: "4 7", opacity: 0.72 },
+  has_genre: { color: "#9a8f7c", opacity: 0.36 },
+  genre_weight: { color: "#b38dcc", opacity: 0.36 },
+};
 
-  const nodeMap = new Map(positioned.map(n => [n.id, n]));
+function groupFor(type: string) {
+  if (type === "user") return "user";
+  if (type === "movie_session") return "session";
+  if (type === "movie_blocked" || type === "erased" || type === "genre_blocked") return "blocked";
+  if (type === "genre") return "genre";
+  return "permanent";
+}
 
-  for (let iter = 0; iter < iterations; iter++) {
-    const alpha = 1 - iter / iterations;
+function truncate(label: string, len = 28) {
+  return label.length > len ? `${label.slice(0, len)}...` : label;
+}
 
-    // Repulsion
-    for (let i = 0; i < positioned.length; i++) {
-      for (let j = i + 1; j < positioned.length; j++) {
-        const a = positioned[i], b = positioned[j];
-        const dx = b.x! - a.x!, dy = b.y! - a.y!;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const force = (3500 / (dist * dist)) * alpha;
-        const fx = (dx / dist) * force, fy = (dy / dist) * force;
-        a.vx! -= fx; a.vy! -= fy;
-        b.vx! += fx; b.vy! += fy;
-      }
-    }
-
-    // Attraction along edges
-    for (const e of edges) {
-      const src = nodeMap.get(e.source), tgt = nodeMap.get(e.target);
-      if (!src || !tgt) continue;
-      const dx = tgt.x! - src.x!, dy = tgt.y! - src.y!;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const idealDist = e.type === "has_genre" ? 120 : 180;
-      const force = ((dist - idealDist) / dist) * 0.08 * alpha;
-      const fx = dx * force, fy = dy * force;
-      src.vx! += fx; src.vy! += fy;
-      tgt.vx! -= fx; tgt.vy! -= fy;
-    }
-
-    // Center gravity
-    for (const n of positioned) {
-      if (n.type === "user") { n.x = width / 2; n.y = height / 2; continue; }
-      n.vx! += (width / 2 - n.x!) * 0.01 * alpha;
-      n.vy! += (height / 2 - n.y!) * 0.01 * alpha;
-    }
-
-    // Apply velocity with damping
-    for (const n of positioned) {
-      if (n.type === "user") continue;
-      n.vx! *= 0.85; n.vy! *= 0.85;
-      n.x! += n.vx!; n.y! += n.vy!;
-      n.x! = Math.max(40, Math.min(width - 40, n.x!));
-      n.y! = Math.max(40, Math.min(height - 40, n.y!));
-    }
+function placeArc(nodes: GraphNode[], center: { x: number; y: number }, radius: number, start: number, end: number): LayoutNode[] {
+  if (nodes.length === 0) return [];
+  if (nodes.length === 1) {
+    const cfg = NODE_CONFIG[nodes[0].type] ?? NODE_CONFIG.recommended;
+    const a = (start + end) / 2;
+    return [{ ...nodes[0], x: center.x + Math.cos(a) * radius, y: center.y + Math.sin(a) * radius, r: cfg.radius }];
   }
+  return nodes.map((node, i) => {
+    const cfg = NODE_CONFIG[node.type] ?? NODE_CONFIG.recommended;
+    const t = i / (nodes.length - 1);
+    const a = start + (end - start) * t;
+    return {
+      ...node,
+      x: center.x + Math.cos(a) * radius,
+      y: center.y + Math.sin(a) * radius,
+      r: cfg.radius,
+    };
+  });
+}
 
-  return positioned;
+function buildLayout(data: GraphData | null) {
+  const all = data?.nodes ?? [];
+  const userNode = all.find((n) => n.type === "user") ?? { id: "user", label: "You", type: "user" as const, weight: 1 };
+  const limited = {
+    session: all.filter((n) => groupFor(n.type) === "session").slice(0, 18),
+    permanent: all.filter((n) => groupFor(n.type) === "permanent").slice(0, 16),
+    genre: all.filter((n) => groupFor(n.type) === "genre").slice(0, 12),
+    blocked: all.filter((n) => groupFor(n.type) === "blocked").slice(0, 12),
+  };
+
+  const nodes: LayoutNode[] = [
+    { ...userNode, x: USER.x, y: USER.y, r: NODE_CONFIG.user.radius },
+    ...placeArc(limited.session, USER, 185, -1.45, 1.45),
+    ...placeArc(limited.permanent, USER, 280, 2.35, 3.95),
+    ...placeArc(limited.genre, USER, 255, -2.3, -0.85),
+    ...placeArc(limited.blocked, USER, 310, 0.9, 2.1),
+  ];
+
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges = (data?.edges ?? [])
+    .filter((edge) => ids.has(String(edge.source)) && ids.has(String(edge.target)))
+    .slice(0, 90);
+
+  return { nodes, edges };
+}
+
+function edgePath(source: LayoutNode, target: LayoutNode, index: number) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const mx = source.x + dx * 0.5;
+  const my = source.y + dy * 0.5;
+  const normal = Math.sqrt(dx * dx + dy * dy) || 1;
+  const curve = ((index % 5) - 2) * 7;
+  const cx = mx + (-dy / normal) * curve;
+  const cy = my + (dx / normal) * curve;
+  return `M ${source.x} ${source.y} Q ${cx} ${cy} ${target.x} ${target.y}`;
 }
 
 export function GnnVisualizer({ graphData, onClose }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const nodesRef = useRef<GraphNode[]>([]);
-  const animFrameRef = useRef<number>(0);
-  const [zoom, setZoom] = useState(1);
-  const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number } | null>(null);
-  const panRef = useRef({ x: 0, y: 0 });
-  const isDragging = useRef(false);
-  const lastMouse = useRef({ x: 0, y: 0 });
-
-  const layout = useCallback((data: GraphData, w: number, h: number) => {
-    const laidOut = runForceLayout([...data.nodes], data.edges, w, h, 300);
-    nodesRef.current = laidOut;
-  }, []);
-
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const { width, height } = canvas;
-    const data = graphData;
-    if (!data) return;
-    const nodes = nodesRef.current;
-    const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
-    ctx.clearRect(0, 0, width, height);
-    ctx.save();
-    ctx.translate(panRef.current.x, panRef.current.y);
-    ctx.scale(zoom, zoom);
-
-    // Draw edges
-    for (const edge of data.edges) {
-      const src = nodeMap.get(edge.source);
-      const tgt = nodeMap.get(edge.target);
-      if (!src || !tgt || !src.x || !tgt.x) continue;
-      const cfg = EDGE_CONFIG[edge.type] || EDGE_CONFIG.recommends;
-
-      ctx.beginPath();
-      ctx.moveTo(src.x, src.y!);
-      ctx.lineTo(tgt.x, tgt.y!);
-
-      const gradient = ctx.createLinearGradient(src.x, src.y!, tgt.x, tgt.y!);
-      gradient.addColorStop(0, cfg.color + "88");
-      gradient.addColorStop(1, cfg.color + "22");
-      ctx.strokeStyle = gradient;
-      ctx.lineWidth = Math.max(0.5, edge.weight * 2.5);
-      ctx.globalAlpha = cfg.opacity;
-      if (cfg.dashed) {
-        ctx.setLineDash([4, 4]);
-      } else {
-        ctx.setLineDash([]);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Edge weight label
-      if (edge.type === "recommends" && edge.weight > 0.1) {
-        ctx.globalAlpha = 0.7;
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "10px Inter, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(
-          edge.weight.toFixed(2),
-          (src.x + tgt.x) / 2,
-          (src.y! + tgt.y!) / 2 - 6
-        );
-      }
-      ctx.globalAlpha = 1;
-    }
-
-    // Draw nodes
-    for (const node of nodes) {
-      if (!node.x) continue;
-      const cfg = NODE_CONFIG[node.type] || NODE_CONFIG.recommended;
-      const r = cfg.radius;
-      const isHovered = hoveredNode?.id === node.id;
-
-      // Glow
-      const glowRadius = isHovered ? r * 2.5 : r * 1.8;
-      const glow = ctx.createRadialGradient(node.x, node.y!, 0, node.x, node.y!, glowRadius);
-      glow.addColorStop(0, cfg.glow + (isHovered ? "55" : "33"));
-      glow.addColorStop(1, cfg.glow + "00");
-      ctx.beginPath();
-      ctx.arc(node.x, node.y!, glowRadius, 0, Math.PI * 2);
-      ctx.fillStyle = glow;
-      ctx.fill();
-
-      // Node circle
-      ctx.beginPath();
-      ctx.arc(node.x, node.y!, isHovered ? r * 1.15 : r, 0, Math.PI * 2);
-      const nodeGrad = ctx.createRadialGradient(node.x - r * 0.3, node.y! - r * 0.3, 0, node.x, node.y!, r);
-      nodeGrad.addColorStop(0, cfg.color + "ff");
-      nodeGrad.addColorStop(1, cfg.color + "99");
-      ctx.fillStyle = nodeGrad;
-      ctx.fill();
-
-      // Border (dashed for session nodes, red for blocked, white otherwise)
-      const blocked = node.type === "erased" || node.type === "movie_blocked" || node.type === "genre_blocked";
-      ctx.strokeStyle = blocked ? "#ef4444" : "#ffffff33";
-      ctx.lineWidth = isHovered ? 2 : 1;
-      if (cfg.dashed) {
-        ctx.setLineDash([4, 3]);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Erased/blocked: strikethrough
-      if (blocked) {
-        ctx.beginPath();
-        ctx.moveTo(node.x - r, node.y!);
-        ctx.lineTo(node.x + r, node.y!);
-        ctx.strokeStyle = "#ef444488";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-
-      // Label
-      ctx.globalAlpha = 1;
-      const maxLabelLen = node.type === "user" ? 999 : 14;
-      const label = node.label.length > maxLabelLen
-        ? node.label.slice(0, maxLabelLen) + "…"
-        : node.label;
-      ctx.font = `${node.type === "user" ? "bold " : ""}${node.type === "genre" ? 9 : 11}px Inter, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillStyle = "#ffffff";
-      ctx.shadowColor = "#000000";
-      ctx.shadowBlur = 4;
-      ctx.fillText(label, node.x, node.y! + r + 14);
-      ctx.shadowBlur = 0;
-    }
-
-    ctx.restore();
-    animFrameRef.current = requestAnimationFrame(draw);
-  }, [graphData, zoom, hoveredNode]);
-
-  // Re-layout when data changes
-  useEffect(() => {
-    if (!graphData || !containerRef.current) return;
-    const { offsetWidth: w, offsetHeight: h } = containerRef.current;
-    layout(graphData, w, h);
-  }, [graphData, layout]);
-
-  // Animation loop
-  useEffect(() => {
-    animFrameRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(animFrameRef.current);
-  }, [draw]);
-
-  // Resize canvas
-  useEffect(() => {
-    const resize = () => {
-      const canvas = canvasRef.current;
-      const container = containerRef.current;
-      if (!canvas || !container) return;
-      canvas.width  = container.offsetWidth;
-      canvas.height = container.offsetHeight;
-      if (graphData) layout(graphData, canvas.width, canvas.height);
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    if (containerRef.current) ro.observe(containerRef.current);
-    return () => ro.disconnect();
-  }, [graphData, layout]);
-
-  // Mouse interaction
-  const getHitNode = (mx: number, my: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const cx = ((mx - rect.left) * scaleX - panRef.current.x) / zoom;
-    const cy = ((my - rect.top)  * scaleY - panRef.current.y) / zoom;
-
-    for (const node of nodesRef.current) {
-      if (!node.x) continue;
-      const cfg = NODE_CONFIG[node.type] || NODE_CONFIG.recommended;
-      const dx = cx - node.x, dy = cy - node.y!;
-      if (dx * dx + dy * dy < cfg.radius * cfg.radius * 1.5) return node;
-    }
-    return null;
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    const node = getHitNode(e.clientX, e.clientY);
-    setHoveredNode(node);
-    if (node) setTooltip({ x: e.clientX, y: e.clientY });
-    else setTooltip(null);
-
-    if (isDragging.current) {
-      panRef.current.x += e.clientX - lastMouse.current.x;
-      panRef.current.y += e.clientY - lastMouse.current.y;
-      lastMouse.current = { x: e.clientX, y: e.clientY };
-    }
-  };
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    setZoom(z => Math.max(0.3, Math.min(3, z - e.deltaY * 0.001)));
-  };
-
-  const resetView = () => {
-    setZoom(1);
-    panRef.current = { x: 0, y: 0 };
-    if (graphData && containerRef.current) {
-      layout(graphData, containerRef.current.offsetWidth, containerRef.current.offsetHeight);
-    }
-  };
-
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const layout = useMemo(() => buildLayout(graphData), [graphData]);
+  const nodeMap = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout.nodes]);
+  const selected = selectedId ? nodeMap.get(selectedId) ?? null : null;
   const stats = graphData?.stats;
 
   return (
@@ -366,152 +174,214 @@ export function GnnVisualizer({ graphData, onClose }: Props) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
+        initial={{ scale: 0.98, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.9, opacity: 0 }}
-        transition={{ type: "spring", damping: 25, stiffness: 300 }}
-        className="relative w-full max-w-5xl h-[85vh] rounded-2xl overflow-hidden border border-white/10"
-        style={{ background: "linear-gradient(135deg, #04040c 0%, #0d0720 50%, #04040c 100%)" }}
+        exit={{ scale: 0.98, opacity: 0 }}
+        transition={{ duration: 0.18 }}
+        className="grid h-[88vh] w-full max-w-7xl overflow-hidden border border-[var(--rule)] bg-[var(--bone)] lg:grid-cols-[minmax(0,1fr)_340px]"
       >
-        {/* Header */}
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-5 py-4 border-b border-white/10 bg-black/30 backdrop-blur-sm">
-          <div className="flex items-center gap-3">
-            <div className="w-2.5 h-2.5 rounded-full bg-accent-green animate-pulse" />
-            <h2 className="text-white font-semibold font-space-grotesk text-lg">
-              Live GNN Graph Visualizer
-            </h2>
-            <span className="text-xs text-white/40 font-inter">
-              {graphData?.nodes.length ?? 0} nodes · {graphData?.edges.length ?? 0} edges
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Zoom controls */}
-            <button
-              onClick={() => setZoom(z => Math.min(3, z + 0.2))}
-              className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-              title="Zoom in"
-            >
-              <ZoomIn size={16} />
-            </button>
-            <button
-              onClick={() => setZoom(z => Math.max(0.3, z - 0.2))}
-              className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-              title="Zoom out"
-            >
-              <ZoomOut size={16} />
-            </button>
-            <button
-              onClick={resetView}
-              className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-              title="Reset view"
-            >
-              <RotateCcw size={16} />
-            </button>
-            <div className="w-px h-5 bg-white/20 mx-1" />
-            <button
-              onClick={onClose}
-              className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-            >
-              <X size={18} />
-            </button>
-          </div>
-        </div>
-
-        {/* Canvas */}
-        <div
-          ref={containerRef}
-          className="absolute inset-0 top-[60px]"
-          style={{ cursor: isDragging.current ? "grabbing" : hoveredNode ? "pointer" : "grab" }}
-        >
-          <canvas
-            ref={canvasRef}
-            className="w-full h-full"
-            onMouseMove={handleMouseMove}
-            onMouseLeave={() => { setHoveredNode(null); setTooltip(null); }}
-            onMouseDown={(e) => { isDragging.current = true; lastMouse.current = { x: e.clientX, y: e.clientY }; }}
-            onMouseUp={() => { isDragging.current = false; }}
-            onWheel={handleWheel}
-          />
-
-          {/* Empty state */}
-          {(!graphData || graphData.nodes.length === 0) && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30">
-              <div className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 flex items-center justify-center mb-4">
-                <span className="text-3xl">🕸️</span>
+        <section className="grid min-h-0 grid-rows-[112px_1fr]">
+          <header className="flex items-center justify-between border-b border-[var(--rule)] px-7">
+            <div>
+              <div className="flex items-center gap-2 font-space-grotesk text-[10px] uppercase tracking-[0.14em] text-[var(--clay)]">
+                <Network size={13} /> Deterministic memory map
               </div>
-              <p className="text-sm font-inter">Start chatting to populate the GNN graph</p>
+              <h2 className="font-display mt-1 text-4xl text-[var(--ink)]">MoodLens live graph</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSelectedId(null)}
+                className="rounded-full border border-[var(--rule)] p-2 text-[var(--clay)] transition-colors hover:text-[var(--ink)]"
+                title="Clear selection"
+              >
+                <RotateCcw size={16} />
+              </button>
+              <button
+                onClick={onClose}
+                className="rounded-full border border-[var(--rule)] p-2 text-[var(--clay)] transition-colors hover:text-[var(--ink)]"
+                title="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </header>
+
+          <div className="relative min-h-0 overflow-hidden">
+            {layout.nodes.length > 1 ? (
+              <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full">
+                <defs>
+                  <pattern id="graph-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(242,237,227,0.045)" strokeWidth="1" />
+                  </pattern>
+                </defs>
+                <rect width={W} height={H} fill="url(#graph-grid)" />
+                <circle cx={USER.x} cy={USER.y} r="185" fill="none" stroke="rgba(216,168,74,0.12)" strokeDasharray="6 9" />
+                <circle cx={USER.x} cy={USER.y} r="280" fill="none" stroke="rgba(120,166,200,0.10)" />
+                <circle cx={USER.x} cy={USER.y} r="310" fill="none" stroke="rgba(216,88,74,0.10)" strokeDasharray="4 8" />
+
+                {layout.edges.map((edge, index) => {
+                  const src = nodeMap.get(String(edge.source));
+                  const tgt = nodeMap.get(String(edge.target));
+                  if (!src || !tgt) return null;
+                  const cfg = EDGE_CONFIG[edge.type] ?? EDGE_CONFIG.recommends;
+                  return (
+                    <path
+                      key={`${edge.source}-${edge.target}-${index}`}
+                      d={edgePath(src, tgt, index)}
+                      fill="none"
+                      stroke={cfg.color}
+                      strokeOpacity={cfg.opacity}
+                      strokeWidth={Math.max(0.8, Math.min(2.4, edge.weight * 1.2))}
+                      strokeDasharray={cfg.dash}
+                    />
+                  );
+                })}
+
+                {layout.nodes.map((node) => {
+                  const cfg = NODE_CONFIG[node.type] ?? NODE_CONFIG.recommended;
+                  const selected = selectedId === node.id;
+                  const showLabel = node.type === "user" || selected;
+                  return (
+                    <g
+                      key={node.id}
+                      onMouseEnter={() => setSelectedId(node.id)}
+                      onFocus={() => setSelectedId(node.id)}
+                      onClick={() => setSelectedId(node.id)}
+                      className="cursor-pointer"
+                      tabIndex={0}
+                    >
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={selected ? node.r + 3 : node.r}
+                        fill={cfg.color}
+                        stroke={selected ? "var(--ink)" : "rgba(20,16,8,0.78)"}
+                        strokeWidth={selected ? 2 : 1.5}
+                      />
+                      {(node.type === "movie_blocked" || node.type === "erased" || node.type === "genre_blocked") && (
+                        <line
+                          x1={node.x - node.r}
+                          x2={node.x + node.r}
+                          y1={node.y}
+                          y2={node.y}
+                          stroke="var(--bone)"
+                          strokeWidth="2"
+                        />
+                      )}
+                      {showLabel && (
+                        <g>
+                          <rect
+                            x={node.x - 62}
+                            y={node.y + node.r + 8}
+                            width="124"
+                            height="22"
+                            fill="rgba(20,16,8,0.86)"
+                            stroke="rgba(242,237,227,0.14)"
+                          />
+                          <text
+                            x={node.x}
+                            y={node.y + node.r + 23}
+                            textAnchor="middle"
+                            fontSize="11"
+                            fill="var(--ink)"
+                            fontFamily="Inter, sans-serif"
+                          >
+                            {truncate(node.label, 18)}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+              </svg>
+            ) : (
+              <div className="flex h-full items-center justify-center text-center text-[var(--clay)]">
+                <div>
+                  <Brain className="mx-auto mb-4 text-[var(--wine)]" size={38} strokeWidth={1.3} />
+                  <p className="font-display text-3xl text-[var(--ink)]">No graph yet.</p>
+                  <p className="mt-2 text-sm">Start chatting and recommendations will appear as nodes.</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <aside className="min-h-0 overflow-y-auto border-l border-[var(--rule)] bg-[rgba(28,24,18,0.94)] p-5">
+          <div className="eyebrow">How to read it</div>
+          <p className="mt-4 text-sm leading-7 text-[var(--ink-2)]">
+            This is no longer a physics graph. It is a fixed memory map: amber mood nodes stay in the inner ring, blue permanent taste nodes sit farther out, purple genres form bridges, and red erased items stay isolated.
+          </p>
+
+          <div className="mt-6 grid gap-2">
+            {["user", "movie_session", "movie_liked", "genre", "movie_blocked"].map((type) => {
+              const cfg = NODE_CONFIG[type];
+              return (
+                <div key={type} className="flex gap-3 border border-[var(--rule)] p-3">
+                  <span className="mt-1 h-3 w-3 rounded-full border border-[rgba(20,16,8,0.7)]" style={{ background: cfg.color }} />
+                  <div>
+                    <div className="text-sm text-[var(--ink)]">{cfg.label}</div>
+                    <div className="mt-1 text-xs leading-5 text-[var(--clay)]">{cfg.explain}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-6 grid grid-cols-3 gap-2">
+            <MiniStat label="nodes" value={layout.nodes.length} />
+            <MiniStat label="edges" value={layout.edges.length} />
+            <MiniStat label="session" value={graphData?.session_count ?? 0} />
+          </div>
+
+          <div className="mt-6 border border-[var(--rule)] p-4">
+            <div className="flex items-center gap-2 font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">
+              <CircleHelp size={12} /> Selected node
+            </div>
+            {selected ? (
+              <div className="mt-3">
+                <div className="text-lg leading-6 text-[var(--ink)]">{selected.label}</div>
+                <div className="mt-2 text-sm text-[var(--clay)]">{NODE_CONFIG[selected.type]?.label ?? selected.type}</div>
+                <p className="mt-3 text-xs leading-6 text-[var(--ink-2)]">{NODE_CONFIG[selected.type]?.explain}</p>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm leading-6 text-[var(--ink-2)]">Hover or click a node to inspect what part of memory it represents.</p>
+            )}
+          </div>
+
+          {stats && (
+            <div className="mt-6 border border-[var(--rule)] p-4">
+              <div className="font-space-grotesk text-[10px] uppercase tracking-[0.12em] text-[var(--clay)]">Profile state</div>
+              <div className="mt-3 grid gap-2 text-xs">
+                <Row label="Permanent likes" value={stats.liked_count ?? 0} color="var(--blue)" />
+                <Row label="Hard blocks" value={stats.blocked_count ?? graphData?.blocked_count ?? 0} color="var(--wine)" />
+                <Row label="Mood active" value={graphData?.session_active ? "yes" : "no"} color="var(--amber)" />
+              </div>
             </div>
           )}
-        </div>
-
-        {/* Legend */}
-        <div className="absolute bottom-4 left-4 flex flex-col gap-1.5 bg-black/40 backdrop-blur-sm rounded-xl p-3 border border-white/10">
-          {Object.entries(NODE_CONFIG).map(([type, cfg]) => (
-            <div key={type} className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: cfg.color, boxShadow: `0 0 6px ${cfg.glow}` }} />
-              <span className="text-xs text-white/60 capitalize font-inter">{type}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* Stats panel */}
-        {stats && (
-          <div className="absolute bottom-4 right-4 bg-black/40 backdrop-blur-sm rounded-xl p-3 border border-white/10 text-xs font-inter">
-            <div className="text-white/40 mb-2 font-medium uppercase tracking-wider text-[10px]">Graph State</div>
-            <div className="space-y-1">
-              <div className="flex gap-3">
-                <span className="text-accent-green">↑ {stats.liked_count}</span>
-                <span className="text-white/40">liked</span>
-              </div>
-              <div className="flex gap-3">
-                <span className="text-red-400">↓ {stats.disliked_count}</span>
-                <span className="text-white/40">erased</span>
-              </div>
-              {stats.liked_genres.length > 0 && (
-                <div className="text-yellow-400/70 mt-1">
-                  ♥ {stats.liked_genres.slice(0, 2).join(", ")}
-                </div>
-              )}
-              {stats.disliked_genres.length > 0 && (
-                <div className="text-red-400/70">
-                  ✕ {stats.disliked_genres.slice(0, 2).join(", ")}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Hover tooltip */}
-        {hoveredNode && tooltip && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="fixed z-50 bg-bg-base/95 backdrop-blur-md border border-white/15 rounded-xl px-3 py-2 pointer-events-none"
-            style={{ left: tooltip.x + 14, top: tooltip.y - 40 }}
-          >
-            <div className="text-white font-medium text-sm">{hoveredNode.label}</div>
-            <div className="flex items-center gap-2 mt-0.5">
-              <div
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: (NODE_CONFIG[hoveredNode.type] || NODE_CONFIG.recommended).color }}
-              />
-              <span className="text-white/50 text-xs capitalize">{hoveredNode.type}</span>
-              {hoveredNode.weight > 0 && (
-                <span className="text-white/40 text-xs">· weight {hoveredNode.weight.toFixed(3)}</span>
-              )}
-            </div>
-          </motion.div>
-        )}
-
-        {/* Zoom indicator */}
-        <div className="absolute top-[72px] right-4 text-xs text-white/30 font-inter">
-          {Math.round(zoom * 100)}%
-        </div>
+        </aside>
       </motion.div>
     </motion.div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="border border-[var(--rule)] p-3 text-center">
+      <div className="font-display text-3xl text-[var(--ink)]">{value}</div>
+      <div className="font-space-grotesk text-[9px] uppercase tracking-[0.12em] text-[var(--clay)]">{label}</div>
+    </div>
+  );
+}
+
+function Row({ label, value, color }: { label: string; value: ReactNode; color: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[var(--ink-2)]">{label}</span>
+      <span className="font-mono" style={{ color }}>{value}</span>
+    </div>
   );
 }
