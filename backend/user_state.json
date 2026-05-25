@@ -1,0 +1,69 @@
+{
+  "liked_movies": [],
+  "disliked_movies": [
+    "#Horror"
+  ],
+  "liked_genres": [
+    "Action"
+  ],
+  "disliked_genres": [
+    "Horror"
+  ],
+  "genre_weights": {
+    "Action": 1.15,
+    "Adventure": 1.0,
+    "Animation": 1.0,
+    "Comedy": 1.0,
+    "Crime": 1.0,
+    "Documentary": 1.0,
+    "Drama": 0.7,
+    "Family": 1.0,
+    "Fantasy": 1.0,
+    "History": 1.0,
+    "Horror": 0.49,
+    "Music": 1.0,
+    "Mystery": 0.7,
+    "Romance": 1.0,
+    "Science Fiction": 1.0,
+    "Sci-Fi": 1.0,
+    "Thriller": 0.7,
+    "TV Movie": 1.0,
+    "War": 1.0,
+    "Western": 1.0
+  },
+  "last_recommendations": [
+    "The Empire Strikes Back",
+    "The Lord of the Rings: The Return of the King",
+    "Star Wars",
+    "The Lord of the Rings: The Fellowship of the Ring",
+    "The Lord of the Rings: The Two Towers"
+  ],
+  "last_recommendation_scores": {
+    "The Empire Strikes Back": 0.9971,
+    "The Lord of the Rings: The Return of the King": 0.9792,
+    "Star Wars": 0.979,
+    "The Lord of the Rings: The Fellowship of the Ring": 0.961,
+    "The Lord of the Rings: The Two Towers": 0.9609
+  },
+  "last_requested_genres": [],
+  "preference_events": [
+    {
+      "type": "like_genre",
+      "genre": "Action"
+    },
+    {
+      "type": "dislike_movie",
+      "title": "#Horror",
+      "genres": [
+        "Drama",
+        "Mystery",
+        "Horror",
+        "Thriller"
+      ]
+    },
+    {
+      "type": "dislike_genre",
+      "genre": "Horror"
+    }
+  ]
+}
