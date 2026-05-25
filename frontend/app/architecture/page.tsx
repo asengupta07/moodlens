@@ -90,38 +90,38 @@ function SectionHeading({
 const dataFlowSteps = [
   {
     step: "01",
-    title: "Data Ingestion",
-    desc: "MovieLens 100K data is transformed into a rich Knowledge Graph representation with typed nodes and edges.",
+    title: "TMDB Ingestion",
+    desc: "~45k movies from movies_metadata.csv + credits.csv, Bayesian-weighted ratings.",
     accent: "green" as const,
   },
   {
     step: "02",
-    title: "Shard Partitioning",
-    desc: "The Knowledge Graph is split into isolated user shards for parallel, localised processing.",
+    title: "LightGCN Pretrain",
+    desc: "Manual 3-layer LightGCN on synthesised user-movie + movie-genre tripartite graph (BPR loss).",
     accent: "purple" as const,
   },
   {
     step: "03",
-    title: "LightGCN Training",
-    desc: "Each shard trains its own isolated LightGCN model independently on its partition data.",
+    title: "Intent Parsing",
+    desc: "Groq LLM (temp=0) splits chat into session intent vs. permanent erase intent.",
     accent: "green" as const,
   },
   {
     step: "04",
-    title: "Score Aggregation",
-    desc: "Trained shard outputs are combined via an aggregation engine into a unified ranking.",
+    title: "Score Blending",
+    desc: "α · LightGCN(user, movie) + (1−α) · Bayesian + bonuses × genre weights × session penalty.",
     accent: "purple" as const,
   },
   {
     step: "05",
-    title: "Targeted Unlearning",
-    desc: "Unlearn requests trigger edge deletion, embedding updates, or single-shard retraining.",
+    title: "Tier 1 — GNNDelete",
+    desc: "Permanent dislike → forget-edge gradient ascent + retain descent on LightGCN embeddings (Cheng et al., ICLR'23).",
     accent: "green" as const,
   },
   {
     step: "06",
-    title: "Explainable Recs",
-    desc: "Updated recommendations are served alongside interpretable, user-facing reasoning.",
+    title: "Tier 2 — Influence Erase",
+    desc: "New Mood button → first-order Hessian-inverse approx subtracts session influence (Koh & Liang, ICML'17).",
     accent: "purple" as const,
   },
 ];
@@ -129,108 +129,79 @@ const dataFlowSteps = [
 const coreComponents = [
   {
     icon: Database,
-    title: "Knowledge Graph Builder",
+    title: "Two-Tier State",
     specs: [
-      {
-        label: "Role",
-        value: "Constructs and exports graph artifacts from raw data",
-      },
-      { label: "Nodes", value: "Users · Movies · Genres · Franchises" },
-      {
-        label: "Edges",
-        value: "Watched · BelongsTo Genre · BelongsTo Franchise",
-      },
+      { label: "Tier", value: "Permanent (user_state.json) + Session (session_state.json)" },
+      { label: "Nodes", value: "Users · Movies · Genres" },
+      { label: "Edges", value: "user↔movie · movie↔genre" },
+      { label: "Session end", value: "Explicit user trigger only (New Mood)" },
     ],
     accent: "green" as const,
   },
   {
     icon: Cpu,
-    title: "LightGCN Models",
+    title: "LightGCN",
     specs: [
-      { label: "Training", value: "Independently per shard using BPR loss" },
-      { label: "Embedding Dim", value: "64" },
-      { label: "Layers", value: "3" },
-      {
-        label: "Purpose",
-        value: "Lightweight graph-conv embeddings per shard",
-      },
+      { label: "Backbone", value: "He et al., SIGIR 2020 — manual PyTorch impl, no PyG" },
+      { label: "Embedding Dim", value: "64 (fixed)" },
+      { label: "Layers", value: "3 (fixed)" },
+      { label: "Loss", value: "BPR + L2 reg" },
     ],
     accent: "purple" as const,
   },
   {
     icon: ShieldAlert,
-    title: "Unlearning & Sharding",
+    title: "Tier 1 — GNNDelete",
     specs: [
-      { label: "Strategy", value: "Random user partition into 5 shards" },
-      {
-        label: "Level 1 (Fast)",
-        value: "Delete edge + recompute embedding (ms)",
-      },
-      {
-        label: "Level 2 (Strong)",
-        value: "Retrain affected shard only (< 1 min)",
-      },
+      { label: "Paper", value: "Cheng, Sun et al., ICLR 2023" },
+      { label: "Trigger", value: "'block X forever' / 'never show pre-1990'" },
+      { label: "Steps", value: "Drop forget edges → ascend forget loss + descend retain loss" },
+      { label: "Verification", value: "MIA-style score on forget set + cosine drift" },
     ],
     accent: "green" as const,
   },
   {
     icon: Zap,
-    title: "Inference & Explainability",
+    title: "Tier 2 — Influence Functions",
     specs: [
-      {
-        label: "Aggregation",
-        value: "Combines shard outputs into final ranking",
-      },
-      {
-        label: "Penalties",
-        value: "Disliked movies/franchises score-penalised",
-      },
-      {
-        label: "Explainability",
-        value: "Matching genres, similar actors, graph paths",
-      },
+      { label: "Paper", value: "Koh & Liang, ICML 2017" },
+      { label: "Trigger", value: "New Mood button → discard or commit" },
+      { label: "Method", value: "First-order Taylor (H^-1 v) on user embedding row" },
+      { label: "Output", value: "Reverts (discard) or fine-tunes (commit) live user vector" },
     ],
     accent: "purple" as const,
   },
 ];
 
 const endpoints = [
-  { method: "GET", path: "/users", accent: "green" as const },
-  { method: "GET", path: "/history/{user_id}", accent: "green" as const },
-  {
-    method: "GET",
-    path: "/recommend/{user_id}?k=10",
-    accent: "green" as const,
-  },
-  { method: "POST", path: "/unlearn", accent: "purple" as const },
-  {
-    method: "GET",
-    path: "/explain/{user_id}/{movie_id}",
-    accent: "green" as const,
-  },
-  { method: "GET", path: "/graph/{user_id}", accent: "green" as const },
+  { method: "GET", path: "/health", accent: "green" as const },
+  { method: "GET", path: "/graph", accent: "green" as const },
+  { method: "GET", path: "/session", accent: "green" as const },
+  { method: "GET", path: "/embedding-drift", accent: "green" as const },
+  { method: "POST", path: "/chat (SSE)", accent: "purple" as const },
+  { method: "POST", path: "/new-mood", accent: "purple" as const },
+  { method: "POST", path: "/permanent-unlearn", accent: "purple" as const },
+  { method: "POST", path: "/reset", accent: "purple" as const },
 ];
 
 const requestPayload = `{
-  "user_id": 42,
-  "movie_id": 318,
-  "scope": "franchise"
+  "movie_ids": ["27205"],
+  "genres": ["Horror"],
+  "year_before": 1990
 }`;
 
 const responsePayload = `{
-  "user_id": 42,
-  "recommendations": [
-    {
-      "movie_id": 101,
-      "title": "Sinister",
-      "genre": ["Horror", "Mystery"],
-      "franchise": null,
-      "score": 0.94,
-      "reason": "Matched genre pattern..."
-    }
-  ],
-  "unlearn_applied": true,
-  "excluded_franchises": ["Conjuring"]
+  "success": true,
+  "movies_affected": 412,
+  "embedding_drift": {
+    "forget_score": -0.013,
+    "retain_score": 0.187,
+    "delta": 0.200,
+    "cosine_distance": 0.341,
+    "movies_affected": 412,
+    "edges_removed": 1184
+  },
+  "message": "GNNDelete erased 412 movies from the graph."
 }`;
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -294,18 +265,19 @@ export default function ArchitecturePage() {
               variants={fadeUp}
               className="text-white/50 text-lg md:text-xl font-light leading-relaxed"
             >
-              Deep dive into the KG + GNN Movie Recommender system — how
-              knowledge graphs, sharded models, and machine unlearning compose
-              into a single, auditable pipeline.
+              MoodLens — a conversational recommender on ~45k TMDB movies with
+              two mathematically grounded unlearning tiers: GNNDelete for
+              permanent identity-level erasure, influence functions for
+              session-scoped forgetting.
             </motion.p>
 
             {/* Header stat pills */}
             <motion.div variants={fadeUp} className="flex flex-wrap gap-3 pt-2">
               {[
-                { val: "5", label: "Shards" },
-                { val: "102K+", label: "Graph Nodes" },
-                { val: "45ms", label: "Unlearn Time" },
-                { val: "99%", label: "Accuracy Retained" },
+                { val: "45K", label: "TMDB Movies" },
+                { val: "64", label: "Embedding Dim" },
+                { val: "2", label: "Unlearning Tiers" },
+                { val: "3", label: "GCN Layers" },
               ].map((s) => (
                 <div
                   key={s.label}

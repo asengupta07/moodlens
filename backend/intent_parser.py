@@ -25,7 +25,7 @@ import re
 import json
 import logging
 import pandas as pd
-from groq import Groq
+from llm_client import GeminiClient as Groq  # Gemini-backed shim
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,16 @@ PLOT_KEYWORDS = [
     "dreams", "hallucination", "simulation", "undercover", "double agent",
     "kidnapping", "hostage", "war", "genocide", "slavery", "immigration",
     "pandemic", "virus", "outbreak", "nature", "wildlife", "ocean", "deep sea",
+]
+
+PERMANENT_PATTERNS = [
+    r"\b(?:forever|never (?:again|ever)|ever again|permanently|block (?:completely|forever|permanently)|erase|delete (?:from my profile|completely)|wipe|purge|burn it down|remove completely|will never watch)\b",
+]
+
+PERMANENT_YEAR_PATTERNS = [
+    r"\b(?:never|don'?t|do not|no)\b[^.]{0,40}\b(?:show|recommend|suggest|give|watch)\b[^.]{0,40}\b(?:before|prior to|older than|pre[- ]?)\s*(\d{4})\b",
+    r"\b(?:no|skip|block|hate|avoid)\b[^.]{0,40}\b(?:pre[- ]?)\s*(\d{4})\b",
+    r"\b(?:movies?|films?)\b[^.]{0,40}\b(?:before|prior to|older than|pre[- ]?)\s*(\d{4})\b",
 ]
 
 WANTS_DIFFERENT_PATTERNS = [
@@ -368,6 +378,20 @@ def _regex_parse(user_input: str, movie_db: pd.DataFrame) -> dict:
         if genre not in liked_genres and genre not in disliked_genres
     ]
 
+    is_permanent = any(re.search(p, user_input, re.IGNORECASE) for p in PERMANENT_PATTERNS)
+    year_block = None
+    for pat in PERMANENT_YEAR_PATTERNS:
+        m = re.search(pat, user_input, re.IGNORECASE)
+        if m:
+            try:
+                year_block = int(m.group(1))
+                break
+            except (ValueError, IndexError):
+                continue
+
+    permanent_genre_block = disliked_genres if is_permanent else []
+    permanent_movie_block = disliked_found if is_permanent else []
+
     result = {
         "genres_requested":    requested_genres,
         "actors_requested":    _extract_actors(user_input, movie_db),
@@ -378,9 +402,13 @@ def _regex_parse(user_input: str, movie_db: pd.DataFrame) -> dict:
         "disliked_found":      disliked_found,
         "liked_genres":        liked_genres,
         "disliked_genres":     disliked_genres,
-        "soft_disliked_genres": [],          # ← ADD THIS LINE
+        "soft_disliked_genres": [],
         "sentiment_last_recs": None,
         "wants_different":     _check_wants_different(user_input),
+        "is_permanent":        is_permanent or bool(year_block),
+        "permanent_year_block": year_block,
+        "permanent_genre_block": permanent_genre_block,
+        "permanent_movie_block": permanent_movie_block,
         "parse_method":        "regex",
     }
     return _postprocess_intent(result, user_input)
@@ -397,19 +425,32 @@ Return ONLY valid JSON — no preamble, no explanation, no markdown fences, no c
 
 JSON schema (return ALL keys, even if empty/null):
 {
-  "genres_requested":      [],
-  "actors_requested":      [],
-  "directors_requested":   [],
-  "plot_description":      "",
-  "plot_keywords":         [],
-  "liked_found":           [],
-  "disliked_found":        [],
-  "liked_genres":          [],
-  "disliked_genres":       [],
-  "soft_disliked_genres":  [],
-  "sentiment_last_recs":   null,
-  "wants_different":       false
+  "genres_requested":       [],
+  "actors_requested":       [],
+  "directors_requested":    [],
+  "plot_description":       "",
+  "plot_keywords":          [],
+  "liked_found":            [],
+  "disliked_found":         [],
+  "liked_genres":           [],
+  "disliked_genres":        [],
+  "soft_disliked_genres":   [],
+  "sentiment_last_recs":    null,
+  "wants_different":        false,
+  "is_permanent":           false,
+  "permanent_year_block":   null,
+  "permanent_genre_block":  [],
+  "permanent_movie_block":  []
 }
+
+PERMANENT UNLEARNING SIGNALS — set is_permanent=true when user explicitly demands erasure with words like:
+"forever", "never", "always", "ever again", "remove completely", "block permanently", "erase", "delete", "wipe", "purge", "burn it down", "I will never watch", "block from my profile"
+
+permanent_year_block — integer year. If user says "never show movies before 1990" → 1990. "no pre-2000 films" → 2000. Null otherwise.
+permanent_genre_block — canonical genre list when user wants the WHOLE GENRE erased forever (e.g. "block horror forever"). Empty if only this-session.
+permanent_movie_block — movie titles user wants permanently erased (not session skip). Empty if only this-session.
+
+is_permanent is independent of session dislikes. Session dislikes go into disliked_found/disliked_genres. Permanent erasure goes into permanent_*. When both could apply, prefer SESSION unless the language is explicit ("forever", "never again", etc.).
 
 FIELD RULES:
 
@@ -651,21 +692,40 @@ def _llm_parse(
     parsed: dict = json.loads(raw)   # raises on bad JSON → caller falls back to regex
 
     result = {
-        "genres_requested":    _grounded_genres(...),
-        "actors_requested":    _canonical_people(...),
-        "directors_requested": _canonical_people(...),
+        "genres_requested":    _grounded_genres(
+            _canonicalize_genres(parsed.get("genres_requested", [])),
+            user_input,
+        ),
+        "actors_requested":    _canonical_people(
+            parsed.get("actors_requested", []),
+            movie_db, "cast_list", user_input,
+        ),
+        "directors_requested": _canonical_people(
+            parsed.get("directors_requested", []),
+            movie_db, "directors_list", user_input,
+        ),
         "plot_description":    parsed.get("plot_description", "") or "",
         "plot_keywords":       parsed.get("plot_keywords", []),
         "liked_found":         [],
         "disliked_found":      [],
-        "liked_genres":        _grounded_genres(...),
-        "disliked_genres":     _grounded_genres(...),
+        "liked_genres":        _grounded_genres(
+            _canonicalize_genres(parsed.get("liked_genres", [])),
+            user_input,
+        ),
+        "disliked_genres":     _grounded_genres(
+            _canonicalize_genres(parsed.get("disliked_genres", [])),
+            user_input,
+        ),
         "sentiment_last_recs": parsed.get("sentiment_last_recs", None),
         "wants_different":     bool(parsed.get("wants_different", False)),
-        "soft_disliked_genres": _grounded_genres(   # ← ADD THESE 3 LINES
+        "soft_disliked_genres": _grounded_genres(
             _canonicalize_genres(parsed.get("soft_disliked_genres", [])),
             user_input,
         ),
+        "is_permanent":        bool(parsed.get("is_permanent", False)),
+        "permanent_year_block": parsed.get("permanent_year_block", None),
+        "permanent_genre_block": _canonicalize_genres(parsed.get("permanent_genre_block", [])),
+        "permanent_movie_block": parsed.get("permanent_movie_block", []),
         "parse_method":        "llm",
     }
 

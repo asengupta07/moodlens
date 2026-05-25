@@ -1,9 +1,12 @@
 """
-api.py — FastAPI server wrapping the movie recommendation engine.
+api.py — FastAPI server for MoodLens (two-tier machine unlearning).
 
-Run with:
-    uvicorn api:app --reload --port 8000
+Run:
+    cd backend
+    uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 """
+
+from __future__ import annotations
 
 import os
 import json
@@ -18,47 +21,52 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 load_dotenv()
 
-from groq import Groq
-from state_manager import (
-    load_state, remember_event, save_state,
-    update_disliked, update_disliked_genre,
-    update_liked, update_liked_genre,
-    decay_genre,
-    initialize_state,
-)
+from llm_client import GeminiClient as Groq  # Gemini-backed shim, Groq-compatible surface
+
+from state_manager import StateManager, save_state, load_state
 from intent_parser import parse_intent
-from scoring_engine import build_movie_db, score_and_recommend
+from scoring_engine import (
+    build_movie_db,
+    score_and_recommend,
+    compute_lightgcn_scores,
+)
 from embedder import setup_embedder, build_plot_index
+from graph.graph_builder import build_viz_payload
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
+
 def _path(env_key, default):
     return os.path.join(ROOT, os.getenv(env_key, default))
+
 
 METADATA_CSV      = _path("METADATA_CSV",     "data/movies_metadata.csv")
 CREDITS_CSV       = _path("CREDITS_CSV",      "data/credits.csv")
 RATINGS_CSV       = _path("RATINGS_CSV",      "data/ratings.csv")
 STATE_FILE        = _path("STATE_FILE",        "user_state.json")
+SESSION_FILE      = _path("SESSION_FILE",      "session_state.json")
 EMBEDDINGS_CACHE  = _path("EMBEDDINGS_CACHE", "embeddings_cache.npy")
+LIGHTGCN_CKPT     = _path("LIGHTGCN_CHECKPOINT", "models/checkpoints/lightgcn_best.pt")
 EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local")
 VOYAGE_API_KEY    = os.getenv("VOYAGE_API_KEY", "")
-GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-GROQ_TEMPERATURE  = float(os.getenv("GROQ_TEMPERATURE", "0.8"))
-GROQ_MAX_TOKENS   = int(os.getenv("GROQ_MAX_TOKENS", "1024"))
+GROQ_MODEL        = os.getenv("GEMINI_MODEL", os.getenv("GROQ_MODEL", "gemini-3.5-flash"))
+GROQ_TEMPERATURE  = float(os.getenv("GEMINI_TEMPERATURE", os.getenv("GROQ_TEMPERATURE", "0.8")))
+GROQ_MAX_TOKENS   = int(os.getenv("GEMINI_MAX_TOKENS", os.getenv("GROQ_MAX_TOKENS", "1024")))
 TOP_N             = int(os.getenv("TOP_N_RESULTS", "5"))
+LIGHTGCN_ALPHA    = float(os.getenv("LIGHTGCN_ALPHA", "0.6"))
 
 app_state: dict = {}
 
 
-# ── Lifespan ────────────────────────────────────────────────────────────────────
+# ── Lifespan ───────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[API] Starting up — loading models...")
+    print("[API] Starting MoodLens backend …")
 
-    _missing = [k for k in ("GROQ_API_KEY", "GROQ_MODEL") if not os.getenv(k)]
-    if _missing:
-        raise RuntimeError(f"Missing env vars: {_missing}")
+    has_key = any(os.getenv(k) for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    if not has_key:
+        raise RuntimeError("Missing env var: set GEMINI_API_KEY (or GOOGLE_API_KEY).")
 
     app_state["groq_client"] = Groq()
 
@@ -68,26 +76,26 @@ async def lifespan(app: FastAPI):
         voyage_key=VOYAGE_API_KEY or None,
     )
 
-    print("[API] Loading movie database...")
+    print("[API] Loading movie database …")
     app_state["movie_db"] = build_movie_db(METADATA_CSV, CREDITS_CSV, RATINGS_CSV)
 
-    print("[API] Building plot index...")
+    print("[API] Building plot embedding index …")
     app_state["plot_index"] = build_plot_index(app_state["movie_db"])
 
-    print("[API] Loading user state...")
-    app_state["state"] = load_state(STATE_FILE)
-
-    app_state["state"]["last_recommendation_scores"] = {}
-    app_state["state"]["last_recommendations"] = []
+    print("[API] Initialising two-tier state manager …")
+    app_state["manager"] = StateManager(
+        state_path=STATE_FILE,
+        session_path=SESSION_FILE,
+        checkpoint_path=LIGHTGCN_CKPT,
+    )
 
     app_state["conversation"] = []
-
     print("[API] Ready ✓")
     yield
     print("[API] Shutting down.")
 
 
-app = FastAPI(title="GNN Movie Recommender API", lifespan=lifespan)
+app = FastAPI(title="MoodLens API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -102,178 +110,127 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
 
+
 class ResetRequest(BaseModel):
     confirm: bool = True
 
 
-# ── System prompt ──────────────────────────────────────────────────────────────
-def build_system_prompt(state: dict) -> str:
-    liked     = state.get("liked_movies", [])
-    disliked  = state.get("disliked_movies", [])
-    liked_g   = state.get("liked_genres", [])
-    blocked_g = state.get("disliked_genres", [])
-    genres    = state.get("genre_weights", {})
-    top_g     = sorted(genres.items(), key=lambda x: x[1], reverse=True)[:3]
+class NewMoodRequest(BaseModel):
+    action: str  # "discard" | "commit"
+
+
+class PermanentUnlearnRequest(BaseModel):
+    movie_ids: list[str] | None = None
+    genres: list[str] | None = None
+    year_before: int | None = None
+
+
+# ── Prompt builders ────────────────────────────────────────────────────────────
+def build_system_prompt(state: dict, session_mood: str | None) -> str:
+    liked = [m.get("title") if isinstance(m, dict) else str(m) for m in state.get("liked_movies", [])]
+    blocked = [m.get("title") if isinstance(m, dict) else str(m) for m in state.get("blocked_movies", [])]
+    blocked_g = state.get("blocked_genres", []) or state.get("disliked_genres", [])
+    liked_g = state.get("liked_genres", [])
+    genres = state.get("genre_weights", {})
+    top_g = sorted(genres.items(), key=lambda x: x[1], reverse=True)[:3]
     top_g_str = ", ".join(f"{g} ({w:.2f})" for g, w in top_g if w != 1.0)
 
-    return f"""You are a friendly, knowledgeable movie recommendation assistant powered by a GNN (Graph Neural Network) with machine unlearning capability.
-You help users discover films they will genuinely love, and can permanently "forget" movies or genres when asked.
+    mood_note = (
+        f"- Current mood session: {session_mood} mood active (this is temporary)"
+        if session_mood else "- Current mood session: none active"
+    )
 
-CURRENT USER PROFILE:
-- Liked movies     : {liked    if liked    else 'none yet'}
-- Disliked/blocked : {disliked if disliked else 'none yet'}
-- Liked genres     : {liked_g if liked_g else 'none yet'}
-- Blocked genres   : {blocked_g if blocked_g else 'none yet'}
-- Top genre weights: {top_g_str if top_g_str else 'all genres equal (no preference yet)'}
+    return f"""You are MoodLens, a conversational movie recommendation assistant powered by:
+  (1) LightGCN graph embeddings learned over a TMDB ~45k movie graph
+  (2) GNNDelete — TIER 1 permanent erasure of permanently-blocked movies/genres
+  (3) Influence functions — TIER 2 session unlearning, triggered by "New Mood"
+
+PROFILE:
+- Liked (permanent)  : {liked or 'none yet'}
+- Permanently blocked: {blocked or 'none yet'}
+- Liked genres       : {liked_g or 'none yet'}
+- Blocked genres     : {blocked_g or 'none yet'}
+- Top genre weights  : {top_g_str or 'all neutral'}
+{mood_note}
 
 RULES:
-1. Present recommendations as a clean numbered list with a one-line reason for each.
-2. NEVER recommend anything in the disliked list: {disliked}.
-3. NEVER recommend movies from blocked genres: {blocked_g}.
-4. Keep responses concise and warm — 2-3 sentences then the list.
-5. Acknowledge likes/dislikes before moving on.
-6. Only mention movies from the SYSTEM CONTEXT list — do not invent titles.
-7. If a plot/director/actor query was made, briefly explain why each pick matches.
-8. If no results were found, say so honestly and ask for different criteria.
-9. When unlearning happens, mention that the GNN graph edge has been removed and the shard reweighted.
+1. Numbered list, 1 line per movie, brief reason.
+2. NEVER recommend permanently-blocked movies or genres above.
+3. 2–3 sentence intro then the list. Warm but concise.
+4. Only mention titles from the SYSTEM CONTEXT block.
+5. If permanent unlearning fired this turn, acknowledge it explicitly:
+   "Got it — I've permanently removed those from your graph (LightGCN embedding shifted)."
+6. If the user is in a mood session, gently distinguish session likes from permanent preferences.
 """
 
 
-def format_reco_context(recommendations: list, intent: dict) -> str:
-    if not recommendations:
-        return "No movies matched the criteria. Tell the user politely and ask them to refine their request."
-
-    directors = intent.get("directors_requested", [])
-    actors    = intent.get("actors_requested", [])
-    genres    = intent.get("genres_requested", [])
-    plot_desc = intent.get("plot_description", "")
-    keywords  = intent.get("plot_keywords", [])
-
+def format_reco_context(recs: list, intent: dict) -> str:
+    if not recs:
+        return "No movies matched. Tell user politely and ask for different criteria."
     parts = []
-    if directors: parts.append("director(s): " + ", ".join(directors))
-    if actors:    parts.append("actor(s): "    + ", ".join(actors))
-    if genres:    parts.append("genre(s): "    + ", ".join(genres))
-    if plot_desc: parts.append("plot: "        + plot_desc)
-    if keywords:  parts.append("keywords: "    + ", ".join(keywords))
+    if intent.get("directors_requested"): parts.append("director(s): " + ", ".join(intent["directors_requested"]))
+    if intent.get("actors_requested"):    parts.append("actor(s): "    + ", ".join(intent["actors_requested"]))
+    if intent.get("genres_requested"):    parts.append("genre(s): "    + ", ".join(intent["genres_requested"]))
+    if intent.get("plot_description"):    parts.append("plot: "        + intent["plot_description"])
+    if intent.get("plot_keywords"):       parts.append("keywords: "    + ", ".join(intent["plot_keywords"]))
     criteria = "; ".join(parts) if parts else "general preference"
-
     lines = [f"Scored results for [{criteria}]:"]
-    for i, (title, score) in enumerate(recommendations, 1):
+    for i, (title, score) in enumerate(recs, 1):
         lines.append(f"  {i}. {title}  (score: {score:.2f})")
-    lines.append("\nIMPORTANT: Only recommend movies from this exact list above. Do not substitute or add others.")
+    lines.append("\nPresent ALL of them as a numbered list. Do not skip or invent titles.")
     return "\n".join(lines)
-
-
-# ── Graph builder ──────────────────────────────────────────────────────────────
-def get_graph_data(state: dict) -> dict:
-    movie_db         = app_state.get("movie_db")
-    nodes            = []
-    edges            = []
-    node_ids         = set()
-
-    liked_movies     = state.get("liked_movies", [])
-    disliked_movies  = state.get("disliked_movies", [])
-    genre_weights    = state.get("genre_weights", {})
-    liked_genres     = state.get("liked_genres", [])
-    disliked_genres  = state.get("disliked_genres", [])
-    rec_scores: dict = state.get("last_recommendation_scores", {})
-
-    nodes.append({"id": "user", "label": "You", "type": "user", "weight": 1.0})
-    node_ids.add("user")
-
-    def safe_node_id(prefix: str, title: str) -> str:
-        return f"{prefix}__{title[:30].replace(' ', '_').replace('/', '_')}"
-
-    # Recommended nodes (purple) — exact scores only
-    for title, score in rec_scores.items():
-        nid = safe_node_id("rec", title)
-        if nid not in node_ids:
-            nodes.append({"id": nid, "label": title, "type": "recommended", "weight": round(score, 3)})
-            node_ids.add(nid)
-        edges.append({
-            "source": "user", "target": nid,
-            "weight": round(score, 3), "type": "recommends",
-        })
-        if movie_db is not None:
-            rows = movie_db[movie_db["title_clean"] == title.lower()]
-            if not rows.empty:
-                genres_list = rows.iloc[0].get("genres_list", []) or []
-                for genre in genres_list[:3]:
-                    gid = f"genre__{genre.replace(' ', '_')}"
-                    if gid not in node_ids:
-                        w = genre_weights.get(genre, 1.0)
-                        nodes.append({"id": gid, "label": genre, "type": "genre", "weight": round(w, 3)})
-                        node_ids.add(gid)
-                    edges.append({
-                        "source": nid, "target": gid,
-                        "weight": round(genre_weights.get(genre, 1.0), 3),
-                        "type": "has_genre",
-                    })
-
-    # Liked nodes (blue)
-    for title in liked_movies:
-        nid     = safe_node_id("liked", title)
-        rec_nid = safe_node_id("rec",   title)
-        if nid not in node_ids and rec_nid not in node_ids:
-            nodes.append({"id": nid, "label": title, "type": "liked", "weight": 1.0})
-            node_ids.add(nid)
-            edges.append({"source": "user", "target": nid, "weight": 0.8, "type": "liked"})
-
-    # Erased nodes (red)
-    for title in disliked_movies:
-        nid = safe_node_id("erased", title)
-        if nid not in node_ids:
-            nodes.append({"id": nid, "label": title, "type": "erased", "weight": 0.0})
-            node_ids.add(nid)
-            edges.append({"source": "user", "target": nid, "weight": 0.0, "type": "erased"})
-
-    return {
-        "nodes": nodes,
-        "edges": edges,
-        "genre_weights": {k: round(v, 3) for k, v in genre_weights.items() if v != 1.0},
-        "stats": {
-            "liked_count":     len(liked_movies),
-            "disliked_count":  len(disliked_movies),
-            "liked_genres":    liked_genres,
-            "disliked_genres": disliked_genres,
-        },
-    }
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": GROQ_MODEL}
+    mgr: StateManager = app_state.get("manager")
+    return {
+        "status": "ok",
+        "model": GROQ_MODEL,
+        "lightgcn_loaded": mgr.lightgcn is not None if mgr else False,
+        "session_active": mgr.session_graph.is_active() if mgr else False,
+    }
+
 
 @app.get("/state")
 async def get_state():
-    return app_state.get("state", {})
+    mgr: StateManager = app_state["manager"]
+    return mgr.preference_graph.state
+
 
 @app.get("/graph")
 async def get_graph():
-    return get_graph_data(app_state.get("state", {}))
+    mgr: StateManager = app_state["manager"]
+    return build_viz_payload(
+        mgr.preference_graph,
+        mgr.session_graph,
+        last_recommendations=mgr.preference_graph.state.get("last_recommendation_scores", {}),
+    )
+
 
 @app.post("/reset")
 async def reset_state(req: ResetRequest):
     if not req.confirm:
         return {"message": "Reset cancelled"}
-    new_state = initialize_state()
-    new_state["last_recommendation_scores"] = {}
-    save_state(STATE_FILE, new_state)
-    app_state["state"]        = new_state
+    mgr: StateManager = app_state["manager"]
+    mgr.reset_all()
     app_state["conversation"] = []
     return {"message": "State reset successfully"}
 
+
 @app.get("/greet")
 async def greet():
-    state        = app_state.get("state", {})
-    groq_client  = app_state.get("groq_client")
+    mgr: StateManager = app_state["manager"]
+    groq_client = app_state["groq_client"]
     conversation = app_state.get("conversation", [])
-
     if conversation:
         return {"greeting": "Welcome back! What would you like to watch today?"}
 
-    sys_prompt = build_system_prompt(state)
+    sys_prompt = build_system_prompt(
+        mgr.preference_graph.state,
+        mgr.session_graph.state.get("detected_mood"),
+    )
     resp = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
@@ -291,17 +248,116 @@ async def greet():
     return {"greeting": greeting}
 
 
+@app.get("/session")
+async def get_session():
+    mgr: StateManager = app_state["manager"]
+    sg = mgr.session_graph
+    return {
+        "active": sg.is_active(),
+        "session_id": sg.state.get("session_id"),
+        "mood": sg.state.get("detected_mood"),
+        "movie_count": len(sg.state.get("interactions", [])),
+        "start_time": sg.state.get("start_time"),
+        "interactions": sg.state.get("interactions", []),
+    }
+
+
+@app.get("/embedding-drift")
+async def embedding_drift():
+    mgr: StateManager = app_state["manager"]
+    history = mgr.preference_graph.state.get("embedding_drift_history", [])
+    permanent = [h for h in history if h.get("tier") == 1]
+    session = [h for h in history if h.get("tier") == 2]
+    return {
+        "has_data": bool(history),
+        "permanent_history": permanent,
+        "session_history": session,
+    }
+
+
+@app.post("/new-mood")
+async def new_mood(req: NewMoodRequest):
+    mgr: StateManager = app_state["manager"]
+    if not mgr.session_graph.is_active():
+        return {
+            "success": False,
+            "message": "No active mood session.",
+            "session_summary": {},
+            "embedding_drift": None,
+        }
+    if req.action not in ("discard", "commit"):
+        raise HTTPException(status_code=400, detail="action must be 'discard' or 'commit'")
+    result = mgr.trigger_session_end(req.action)
+    return {
+        "success": True,
+        "session_summary": result.get("session_summary", {}),
+        "embedding_drift": result.get("metrics", {}),
+        "message": (
+            "Mood cleared. Taste profile restored."
+            if req.action == "discard"
+            else "Mood committed into your permanent profile."
+        ),
+    }
+
+
+@app.post("/permanent-unlearn")
+async def permanent_unlearn(req: PermanentUnlearnRequest):
+    mgr: StateManager = app_state["manager"]
+    if mgr.lightgcn is None:
+        raise HTTPException(status_code=503, detail="LightGCN checkpoint not loaded")
+
+    movie_ids: list[str] = list(req.movie_ids or [])
+    movie_db = app_state["movie_db"]
+
+    if req.year_before:
+        movie_ids += mgr._movies_before_year(movie_db, int(req.year_before))
+    if req.genres:
+        for g in req.genres:
+            movie_ids += mgr._movies_in_genre(movie_db, g)
+            mgr.preference_graph.add_permanent_genre_block(g)
+    # Mark each movie as permanently disliked in the profile
+    for m_id in movie_ids:
+        rows = movie_db[movie_db["movie_id"] == m_id]
+        if rows.empty:
+            continue
+        title = str(rows.iloc[0]["title"])
+        genres = list(rows.iloc[0]["genres_list"])
+        mgr.preference_graph.add_permanent_dislike(m_id, title, genres)
+
+    movie_ids = list(set(movie_ids))
+    if not movie_ids:
+        return {
+            "success": False,
+            "movies_affected": 0,
+            "embedding_drift": None,
+            "message": "No matching movies.",
+        }
+
+    metrics = mgr.trigger_permanent_unlearn(movie_ids)
+    return {
+        "success": True,
+        "movies_affected": metrics.get("movies_affected", len(movie_ids)),
+        "embedding_drift": metrics,
+        "message": f"GNNDelete erased {metrics.get('movies_affected', 0)} movies from the graph.",
+    }
+
+
+# ── Chat (upgraded SSE) ───────────────────────────────────────────────────────
 @app.post("/chat")
 async def chat(req: ChatRequest):
     user_input = req.message.strip()
     if not user_input:
         raise HTTPException(status_code=400, detail="Empty message")
 
-    movie_db     = app_state["movie_db"]
-    plot_index   = app_state["plot_index"]
-    state        = app_state["state"]
+    movie_db = app_state["movie_db"]
+    plot_index = app_state["plot_index"]
+    groq_client = app_state["groq_client"]
     conversation = app_state["conversation"]
-    groq_client  = app_state["groq_client"]
+    mgr: StateManager = app_state["manager"]
+
+    # Ensure session is active when any chat happens (mood session begins implicitly)
+    if not mgr.session_graph.is_active():
+        mgr.session_graph.start_session()
 
     async def generate():
         intent = parse_intent(
@@ -309,61 +365,24 @@ async def chat(req: ChatRequest):
             movie_db=movie_db,
             groq_client=groq_client,
             groq_model=GROQ_MODEL,
-            last_recs=state.get("last_recommendations", []),
+            last_recs=mgr.preference_graph.state.get("last_recommendations", []),
             recent_history=conversation[-6:],
-            user_state=state,
+            user_state=mgr.preference_graph.state,
         )
 
-        state_changed = False
+        proc = mgr.process_intent(intent, movie_db)
 
-        # ── Liked movies ──────────────────────────────────────────────────────
-        for title in intent.get("liked_found", []):
-            rows   = movie_db[movie_db["title_clean"] == title.lower()]
-            genres = list(rows.iloc[0]["genres_list"]) if not rows.empty else []
-            update_liked(state, title, genres)
-            remember_event(state, {"type": "like_movie", "title": title, "genres": genres})
-            state_changed = True
+        # Stream unlearn event immediately if Tier 1 fired this turn
+        if proc.get("unlearning_triggered"):
+            yield (
+                "data: " + json.dumps({
+                    "type": "unlearn",
+                    "tier": proc["unlearning_tier"],
+                    "metrics": proc["metrics"],
+                }) + "\n\n"
+            )
 
-        # ── Liked genres ──────────────────────────────────────────────────────
-        for genre in intent.get("liked_genres", []):
-            update_liked_genre(state, genre)
-            remember_event(state, {"type": "like_genre", "genre": genre})
-            state_changed = True
-
-        # ── Disliked movies ───────────────────────────────────────────────────
-        for title in intent.get("disliked_found", []):
-            rows   = movie_db[movie_db["title_clean"] == title.lower()]
-            genres = list(rows.iloc[0]["genres_list"]) if not rows.empty else []
-            update_disliked(state, title, [])
-            for genre in genres:
-                decay_genre(state, genre)
-            remember_event(state, {"type": "dislike_movie", "title": title, "genres": genres})
-            state_changed = True
-
-        # ── Hard genre blocks ─────────────────────────────────────────────────
-        for genre in intent.get("disliked_genres", []):
-            update_disliked_genre(state, genre)
-            remember_event(state, {"type": "dislike_genre", "genre": genre})
-            state_changed = True
-
-        # ── Soft genre decay only ─────────────────────────────────────────────
-        for genre in intent.get("soft_disliked_genres", []):
-            decay_genre(state, genre)
-            remember_event(state, {"type": "soft_dislike_genre", "genre": genre})
-            state_changed = True
-
-        # ── Unblock genre if user explicitly requests it ──────────────────────
-        for genre in intent.get("genres_requested", []):
-            if genre in state.get("disliked_genres", []):
-                state["disliked_genres"].remove(genre)
-                state["genre_weights"][genre] = max(state["genre_weights"].get(genre, 1.0), 1.0)
-                remember_event(state, {"type": "unblock_genre", "genre": genre})
-                state_changed = True
-
-        if state_changed:
-            save_state(STATE_FILE, state)
-
-        # ── pure_sentiment MUST be computed before scoring ────────────────────
+        # ── Build effective intent for scoring ─────────────────────────────────
         has_any_filter = any([
             intent.get("genres_requested"),
             intent.get("actors_requested"),
@@ -371,54 +390,82 @@ async def chat(req: ChatRequest):
             intent.get("plot_description"),
             intent.get("plot_keywords"),
         ])
-
         pure_sentiment = (
-            state_changed
+            proc["state_changed"]
             and not has_any_filter
             and not intent.get("wants_different")
+            and not proc.get("unlearning_triggered")
         )
 
-        # ── Persist genre context when user requests genres ───────────────────
         if intent.get("genres_requested"):
-            state["last_requested_genres"] = intent["genres_requested"]
-            save_state(STATE_FILE, state)
+            mgr.preference_graph.state["last_requested_genres"] = intent["genres_requested"]
+            mgr.preference_graph.save()
 
-        # ── Build effective intent for scoring ────────────────────────────────
         effective_intent = dict(intent)
-
         if intent.get("wants_different") and not has_any_filter:
-            effective_intent["genres_requested"]    = []
-            effective_intent["actors_requested"]    = []
-            effective_intent["directors_requested"] = []
-            effective_intent["plot_keywords"]       = []
+            for k in ("genres_requested", "actors_requested", "directors_requested", "plot_keywords"):
+                effective_intent[k] = []
         elif not has_any_filter and not pure_sentiment:
-            # Short message like "No I don't like it" — carry last genre context
-            last_genres = state.get("last_requested_genres", [])
+            last_genres = mgr.preference_graph.state.get("last_requested_genres", [])
             if last_genres:
                 effective_intent["genres_requested"] = last_genres
 
-        # ── Score & recommend ─────────────────────────────────────────────────
+        # ── LightGCN scores for the live user ─────────────────────────────────
+        gcn_scores = None
+        if mgr.lightgcn is not None:
+            gcn_scores = compute_lightgcn_scores(
+                model=mgr.lightgcn,
+                edge_index=mgr.edge_index,
+                user_id=mgr.lightgcn_user_id,
+                movie_db=movie_db,
+                item_map=mgr.item_map,
+            )
+
         recommendations = score_and_recommend(
             movie_db=movie_db,
             intent=effective_intent,
-            state=state,
+            state=mgr.preference_graph.state,
             plot_index=plot_index,
             top_n=TOP_N,
+            lightgcn_scores=gcn_scores,
+            lightgcn_alpha=LIGHTGCN_ALPHA if gcn_scores else 0.0,
+            preference_graph=mgr.preference_graph,
+            session_graph=mgr.session_graph,
         )
 
         shown_recommendations = bool(recommendations) and not pure_sentiment
 
         if shown_recommendations:
-            state["last_recommendations"]       = [r[0] for r in recommendations]
-            state["last_recommendation_scores"] = {r[0]: r[1] for r in recommendations}
-            save_state(STATE_FILE, state)
+            mgr.preference_graph.state["last_recommendations"] = [r[0] for r in recommendations]
+            mgr.preference_graph.state["last_recommendation_scores"] = {r[0]: r[1] for r in recommendations}
+            mgr.preference_graph.save()
+            # Log recommended movies into the session graph
+            for title, _ in recommendations:
+                rows = movie_db[movie_db["title_clean"] == title.lower()]
+                if rows.empty:
+                    continue
+                mgr.session_graph.add_interaction(
+                    str(rows.iloc[0]["movie_id"]),
+                    title,
+                    "recommended",
+                    weight=0.5,
+                    genres=list(rows.iloc[0]["genres_list"]),
+                )
 
-        # ── Build LLM context ─────────────────────────────────────────────────
+        # ── LLM context ───────────────────────────────────────────────────────
         if pure_sentiment:
             reco_context = (
-                "The user just expressed a like/dislike. "
-                "Acknowledge it warmly, confirm the preference was noted, "
-                "and invite them to ask for recommendations."
+                "The user just expressed a like/dislike. Acknowledge warmly, "
+                "confirm preference noted, invite them to ask for recommendations."
+            )
+        elif proc.get("unlearning_triggered"):
+            metrics = proc["metrics"] or {}
+            reco_context = (
+                f"PERMANENT UNLEARNING FIRED (Tier 1, GNNDelete). "
+                f"Movies erased: {metrics.get('movies_affected', '?')}. "
+                f"Cosine drift on forgotten embeddings: {metrics.get('cosine_distance', 0):.4f}. "
+                "Acknowledge in one warm sentence. Then list current recommendations below.\n"
+                + format_reco_context(recommendations, effective_intent)
             )
         elif intent.get("wants_different"):
             reco_context = (
@@ -427,25 +474,32 @@ async def chat(req: ChatRequest):
             )
         elif intent.get("sentiment_last_recs") == "negative" and not recommendations:
             reco_context = (
-                "The user didn't enjoy the last suggestions and no new results matched. "
+                "User did not enjoy the last suggestions and nothing matched. "
                 "Apologise briefly, ask them to describe what they'd prefer differently."
             )
         else:
             reco_context = format_reco_context(recommendations, effective_intent)
 
-        # ── Groq call (streaming) ─────────────────────────────────────────────
-        sys_prompt = build_system_prompt(state)
-        conversation.append({"role": "user", "content": user_input})
+        # Session event for the frontend badge
+        yield (
+            "data: " + json.dumps({
+                "type": "session",
+                "active": mgr.session_graph.is_active(),
+                "mood": mgr.session_graph.state.get("detected_mood"),
+                "movie_count": len(mgr.session_graph.state.get("interactions", [])),
+            }) + "\n\n"
+        )
 
+        # ── Groq streaming ────────────────────────────────────────────────────
+        sys_prompt = build_system_prompt(
+            mgr.preference_graph.state,
+            mgr.session_graph.state.get("detected_mood"),
+        )
+        conversation.append({"role": "user", "content": user_input})
         injected = (
             "\n\n[SYSTEM CONTEXT — internal only, do not quote verbatim]\n"
             + reco_context
-            + "\nPresent ALL movies from the scored list above as a numbered list. "
-            + "CRITICAL: Do not skip, omit, or substitute any title. "
-            + "Do not add titles from your own knowledge. "
-            + "Present every single movie in the list, no matter what."
         )
-
         llm_messages = (
             [{"role": "system", "content": sys_prompt}]
             + conversation[:-1]
@@ -469,19 +523,22 @@ async def chat(req: ChatRequest):
                 yield f"data: {json.dumps({'type': 'token', 'content': tok})}\n\n"
             await asyncio.sleep(0)
 
-        bot_reply = "".join(full_reply)
-        conversation.append({"role": "assistant", "content": bot_reply})
+        conversation.append({"role": "assistant", "content": "".join(full_reply)})
 
-        graph_data = get_graph_data(state)
+        graph_data = build_viz_payload(
+            mgr.preference_graph,
+            mgr.session_graph,
+            last_recommendations=mgr.preference_graph.state.get("last_recommendation_scores", {}),
+        )
         yield f"data: {json.dumps({'type': 'graph', 'data': graph_data})}\n\n"
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection":    "keep-alive",
+            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
     )

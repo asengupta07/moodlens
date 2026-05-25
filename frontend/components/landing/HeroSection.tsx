@@ -61,7 +61,7 @@ export function HeroSection() {
           {/* Badge */}
           <motion.div variants={fadeUp} className="inline-flex">
             <span className="px-4 py-1.5 rounded-full text-xs font-semibold tracking-widest uppercase text-accent-green bg-accent-green/10 border border-accent-green/25 shadow-[0_0_18px_rgba(0,255,136,0.15)]">
-              AI-Powered Architecture
+              MoodLens · Two-Tier Machine Unlearning
             </span>
           </motion.div>
 
@@ -70,10 +70,10 @@ export function HeroSection() {
             variants={fadeUp}
             className="font-space-grotesk text-5xl md:text-6xl lg:text-[76px] font-bold leading-[1.05] tracking-tight"
           >
-            Recommendations
-            <br className="hidden sm:block" /> that can{" "}
+            Your taste is yours.
+            <br className="hidden sm:block" /> Your mood is{" "}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-accent-green via-accent-glow to-accent-purple">
-              forget.
+              temporary.
             </span>
           </motion.h1>
 
@@ -82,9 +82,9 @@ export function HeroSection() {
             variants={fadeUp}
             className="text-white/55 text-lg md:text-xl max-w-xl font-light leading-relaxed"
           >
-            A knowledge-graph powered recommendation system that selectively
-            forgets user preferences on demand — no full model retraining
-            required.
+            MoodLens runs LightGCN over a ~45k TMDB graph with two unlearning
+            tiers — GNNDelete for permanent dislikes, influence functions for
+            mood sessions. The algorithm knows the difference.
           </motion.p>
 
           {/* CTAs */}
@@ -130,7 +130,7 @@ export function HeroSection() {
                   <span className="w-3 h-3 rounded-full bg-yellow-500/80" />
                   <span className="w-3 h-3 rounded-full bg-green-500/80" />
                   <span className="ml-3 text-xs text-white/40 font-mono tracking-wider">
-                    unlearn.sh
+                    moodlens.sh
                   </span>
                 </div>
 
@@ -147,7 +147,7 @@ export function HeroSection() {
                       <span className="text-xs text-accent-purple font-bold">U</span>
                     </div>
                     <div className="bg-white/[0.06] border border-white/10 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-white/80 leading-relaxed max-w-[85%]">
-                      Never show me Horror movies again. I hate Conjuring 2.
+                      Block horror forever. Also no movies before 1990.
                     </div>
                   </motion.div>
 
@@ -159,10 +159,10 @@ export function HeroSection() {
                     className="flex gap-3 items-start justify-end"
                   >
                     <div className="bg-white/[0.06] border border-accent-green/25 border-l-2 border-l-accent-green rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-white/80 leading-relaxed max-w-[85%]">
-                      <p>Edge deleted from Knowledge Graph.</p>
-                      <p>Shard 3 retraining initiated.</p>
+                      <p>GNNDelete fired (Tier 1).</p>
+                      <p>412 movies erased — cosine drift 0.34.</p>
                       <p className="text-accent-green mt-2 font-medium">
-                        ✓ Franchise removed from recommendations.
+                        ✓ Embeddings updated. Profile clean.
                       </p>
                     </div>
                     <div className="w-8 h-8 rounded-full bg-accent-green/20 border border-accent-green/30 flex items-center justify-center shrink-0 mt-0.5">

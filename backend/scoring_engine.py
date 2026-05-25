@@ -211,6 +211,12 @@ def score_and_recommend(
     state:       dict,
     plot_index:  np.ndarray | None = None,
     top_n:       int = TOP_N,
+    lightgcn_scores: dict[int, float] | None = None,
+    lightgcn_alpha: float = 0.0,
+    session_movie_titles: set[str] | None = None,
+    session_penalty: float = 0.3,
+    preference_graph=None,
+    session_graph=None,
 ) -> list[tuple[str, float]]:
     """
     Filter → score → rank movies.
@@ -224,6 +230,16 @@ def score_and_recommend(
       liked_found         list[str]
       disliked_found      list[str]
 
+    Optional LightGCN integration:
+      lightgcn_scores  — dict[row_idx → raw GCN score] for all movies (or None)
+      lightgcn_alpha   — blend weight (0.0 = pure Bayesian, 0.6 = recommended)
+
+    Optional two-tier overrides:
+      preference_graph — overrides state.disliked_movies/disliked_genres if set
+      session_graph    — overrides session_movie_titles if set
+      session_movie_titles — set of titles to soft-penalise (avoid repeats in mood)
+      session_penalty  — multiplier applied to session-seen movies (default 0.3)
+
     Returns list of (title, score) tuples, up to top_n.
     """
     genres_req    = [g.lower() for g in intent.get("genres_requested",    [])]
@@ -232,10 +248,21 @@ def score_and_recommend(
     keywords_req  = [k.lower() for k in intent.get("plot_keywords",       [])]
     plot_desc     = (intent.get("plot_description") or "").strip()
 
-    disliked_set   = {t.lower() for t in state.get("disliked_movies", [])}
-    last_recs_set  = {t.lower() for t in state.get("last_recommendations", [])}
-    blocked_genres = {g.lower() for g in state.get("disliked_genres", [])}
-    genre_weights  = state.get("genre_weights", {})
+    if preference_graph is not None:
+        disliked_set = preference_graph.get_blocked_movie_titles()
+        blocked_genres = preference_graph.get_blocked_genres()
+        genre_weights = preference_graph.get_genre_weights()
+    else:
+        disliked_set = {t.lower() for t in state.get("disliked_movies", [])}
+        blocked_genres = {g.lower() for g in state.get("disliked_genres", [])}
+        genre_weights = state.get("genre_weights", {})
+
+    last_recs_set = {t.lower() for t in state.get("last_recommendations", [])}
+
+    if session_graph is not None and session_graph.is_active():
+        session_titles_lower = session_graph.get_session_movie_titles()
+    else:
+        session_titles_lower = {t.lower() for t in (session_movie_titles or set())}
 
     # ── Semantic plot search: get candidate row indices ────────────────────────
     semantic_indices: set[int] | None = None
@@ -326,10 +353,61 @@ def score_and_recommend(
         w_genres = max(0.0, min(w_genres, 5.0))
 
         base        = float(row.get("normalized_base_weight", 0.5))
-        final_score = (base + matching_points) * w_genres
+        bayesian_part = (base + matching_points)
+
+        # ── LightGCN blend ─────────────────────────────────────────────────────
+        gcn_score = 0.0
+        if lightgcn_scores is not None and row_idx in lightgcn_scores:
+            gcn_score = float(lightgcn_scores[row_idx])
+        alpha = float(lightgcn_alpha) if lightgcn_scores else 0.0
+        blended = alpha * gcn_score + (1.0 - alpha) * bayesian_part
+
+        # ── Session penalty (already seen this mood) ──────────────────────────
+        penalty = 1.0
+        if session_titles_lower and title_lower in session_titles_lower:
+            penalty = float(session_penalty)
+
+        final_score = blended * w_genres * penalty
 
         results.append((title, round(final_score, 4)))
 
     # ── Sort descending, return top N ─────────────────────────────────────────
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:top_n]
+
+
+def compute_lightgcn_scores(
+    model,
+    edge_index,
+    user_id: int,
+    movie_db: pd.DataFrame,
+    item_map: dict[str, int],
+) -> dict[int, float]:
+    """
+    Batch-score every movie row against `user_id`'s embedding.
+    Returns {row_idx_in_movie_db: scalar_score}.
+    """
+    import torch
+    if model is None:
+        return {}
+    model.eval()
+    with torch.no_grad():
+        emb = model.propagate(edge_index)
+        user_vec = emb[user_id]
+        # Scores for ALL movies
+        movie_emb = emb[model.num_users : model.num_users + model.num_movies]
+        scores_all = (movie_emb @ user_vec).cpu().numpy()
+    out: dict[int, float] = {}
+    for row_idx, row in movie_db.iterrows():
+        tmdb_id = str(row.get("movie_id"))
+        local = item_map.get(tmdb_id)
+        if local is None or local >= len(scores_all):
+            continue
+        out[int(row_idx)] = float(scores_all[local])
+    # min-max normalise to roughly [0, 1] for blending with Bayesian
+    if out:
+        vals = list(out.values())
+        lo, hi = min(vals), max(vals)
+        if hi > lo:
+            out = {k: (v - lo) / (hi - lo) for k, v in out.items()}
+    return out

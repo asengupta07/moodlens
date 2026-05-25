@@ -189,3 +189,10 @@ EEMU-main/**/__pycache__/
 
 
 data/
+
+# MoodLens runtime artifacts
+backend/session_state.json
+backend/user_state.json
+backend/models/checkpoints/
+evaluation/metrics.json
+

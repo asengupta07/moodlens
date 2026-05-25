@@ -8,7 +8,7 @@ import sys
 import json
 import numpy as np
 import pandas as pd
-from groq import Groq
+from llm_client import GeminiClient as Groq  # Gemini-backed shim
 from dotenv import load_dotenv
 
 # ── Load .env before anything else ────────────────────────────────────────────
@@ -45,20 +45,18 @@ STATE_FILE        = _path("STATE_FILE",          "user_state.json")
 EMBEDDINGS_CACHE  = _path("EMBEDDINGS_CACHE",   "embeddings_cache.npy")
 EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local")
 VOYAGE_API_KEY    = os.getenv("VOYAGE_API_KEY",  "")
-GROQ_MODEL        = os.getenv("GROQ_MODEL",      "")
-GROQ_TEMPERATURE  = float(os.getenv("GROQ_TEMPERATURE", "0.8"))
-GROQ_MAX_TOKENS   = int(os.getenv("GROQ_MAX_TOKENS",    "1024"))
+GROQ_MODEL        = os.getenv("GEMINI_MODEL", os.getenv("GROQ_MODEL", "gemini-3.5-flash"))
+GROQ_TEMPERATURE  = float(os.getenv("GEMINI_TEMPERATURE", os.getenv("GROQ_TEMPERATURE", "0.8")))
+GROQ_MAX_TOKENS   = int(os.getenv("GEMINI_MAX_TOKENS", os.getenv("GROQ_MAX_TOKENS", "1024")))
 TOP_N             = int(os.getenv("TOP_N_RESULTS",       "5"))
 
 # ── Validate required env vars ─────────────────────────────────────────────────
-_missing = [k for k in ("GROQ_API_KEY", "GROQ_MODEL") if not os.getenv(k)]
-if _missing:
-    for k in _missing:
-        print(f"[ERROR] {k} is not set in your .env file.")
+if not (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
+    print("[ERROR] GEMINI_API_KEY (or GOOGLE_API_KEY) not set in your .env file.")
     sys.exit(1)
 
-# ── Groq client ────────────────────────────────────────────────────────────────
-groq_client = Groq()   # auto-reads GROQ_API_KEY from env
+# ── LLM client (Gemini-backed shim, Groq-compatible API) ──────────────────────
+groq_client = Groq()   # reads GEMINI_API_KEY / GOOGLE_API_KEY from env
 
 
 # ══════════════════════════════════════════════════════════════════════════════

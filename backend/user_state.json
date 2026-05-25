@@ -1,28 +1,37 @@
 {
-  "liked_movies": [],
-  "disliked_movies": [
-    "#Horror"
+  "liked_movies": [
+    {
+      "id": "110381",
+      "title": "Today",
+      "timestamp": "2026-05-25T16:13:05",
+      "engagement": 1.0
+    }
   ],
-  "liked_genres": [
-    "Action"
-  ],
+  "disliked_movies": [],
+  "blocked_movies": [],
+  "liked_genres": [],
   "disliked_genres": [
-    "Horror"
+    "Horror",
+    "Thriller"
+  ],
+  "blocked_genres": [
+    "Horror",
+    "Thriller"
   ],
   "genre_weights": {
-    "Action": 1.15,
+    "Action": 1.0,
     "Adventure": 1.0,
     "Animation": 1.0,
     "Comedy": 1.0,
     "Crime": 1.0,
     "Documentary": 1.0,
-    "Drama": 0.7,
+    "Drama": 1.15,
     "Family": 1.0,
     "Fantasy": 1.0,
     "History": 1.0,
-    "Horror": 0.49,
+    "Horror": 0.7,
     "Music": 1.0,
-    "Mystery": 0.7,
+    "Mystery": 1.0,
     "Romance": 1.0,
     "Science Fiction": 1.0,
     "Sci-Fi": 1.0,
@@ -32,38 +41,64 @@
     "Western": 1.0
   },
   "last_recommendations": [
-    "The Empire Strikes Back",
-    "The Lord of the Rings: The Return of the King",
-    "Star Wars",
-    "The Lord of the Rings: The Fellowship of the Ring",
-    "The Lord of the Rings: The Two Towers"
+    "The Godfather: Part II",
+    "There Will Be Blood",
+    "Me and Earl and the Dying Girl",
+    "The Sea Inside",
+    "Casino"
   ],
   "last_recommendation_scores": {
-    "The Empire Strikes Back": 0.9971,
-    "The Lord of the Rings: The Return of the King": 0.9792,
-    "Star Wars": 0.979,
-    "The Lord of the Rings: The Fellowship of the Ring": 0.961,
-    "The Lord of the Rings: The Two Towers": 0.9609
+    "The Godfather: Part II": 0.9038,
+    "There Will Be Blood": 0.9006,
+    "Me and Earl and the Dying Girl": 0.8993,
+    "The Sea Inside": 0.895,
+    "Casino": 0.894
   },
   "last_requested_genres": [],
   "preference_events": [
     {
-      "type": "like_genre",
-      "genre": "Action"
-    },
-    {
-      "type": "dislike_movie",
-      "title": "#Horror",
+      "type": "like",
+      "timestamp": "2026-05-25T16:13:05",
+      "movie_id": "110381",
+      "title": "Today",
       "genres": [
-        "Drama",
-        "Mystery",
-        "Horror",
-        "Thriller"
+        "Drama"
       ]
     },
     {
-      "type": "dislike_genre",
+      "type": "permanent_block_genre",
+      "timestamp": "2026-05-25T16:13:48",
       "genre": "Horror"
+    },
+    {
+      "type": "permanent_block_genre",
+      "timestamp": "2026-05-25T16:18:30",
+      "genre": "Thriller"
     }
-  ]
+  ],
+  "embedding_drift_history": [
+    {
+      "tier": 1,
+      "event_type": "permanent_unlearn",
+      "timestamp": "2026-05-25T16:13:54",
+      "forget_score": 0.5287678837776184,
+      "retain_score": 2.5102574825286865,
+      "delta": 1.9814895987510681,
+      "cosine_distance": 0.05555466562509537,
+      "movies_affected": 4631,
+      "edges_removed": 17048
+    },
+    {
+      "tier": 1,
+      "event_type": "permanent_unlearn",
+      "timestamp": "2026-05-25T16:18:35",
+      "forget_score": 0.989098310470581,
+      "retain_score": 1.7142802476882935,
+      "delta": 0.7251819372177124,
+      "cosine_distance": 0.06991056352853775,
+      "movies_affected": 7565,
+      "edges_removed": 24249
+    }
+  ],
+  "lightgcn_user_id": 0
 }

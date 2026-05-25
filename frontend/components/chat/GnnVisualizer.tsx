@@ -7,8 +7,18 @@ import { X, Maximize2, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 interface GraphNode {
   id: string;
   label: string;
-  type: "user" | "recommended" | "liked" | "erased" | "genre";
+  type:
+    | "user"
+    | "recommended"
+    | "liked"
+    | "erased"
+    | "genre"
+    | "movie_liked"
+    | "movie_session"
+    | "movie_blocked"
+    | "genre_blocked";
   weight: number;
+  interaction?: string;
   x?: number;
   y?: number;
   vx?: number;
@@ -19,7 +29,15 @@ interface GraphEdge {
   source: string;
   target: string;
   weight: number;
-  type: "recommends" | "liked" | "erased" | "has_genre";
+  type:
+    | "recommends"
+    | "liked"
+    | "erased"
+    | "has_genre"
+    | "permanent_like"
+    | "session_interaction"
+    | "blocked"
+    | "genre_weight";
 }
 
 interface GraphData {
@@ -31,7 +49,13 @@ interface GraphData {
     disliked_count: number;
     liked_genres: string[];
     disliked_genres: string[];
+    blocked_count?: number;
+    blocked_genres?: string[];
   };
+  session_active?: boolean;
+  session_mood?: string | null;
+  session_count?: number;
+  blocked_count?: number;
 }
 
 interface Props {
@@ -39,19 +63,27 @@ interface Props {
   onClose: () => void;
 }
 
-const NODE_CONFIG = {
-  user:        { color: "#00ff88", radius: 28, glow: "#00ff88" },
-  recommended: { color: "#a855f7", radius: 20, glow: "#a855f7" },
-  liked:       { color: "#38bdf8", radius: 16, glow: "#38bdf8" },
-  erased:      { color: "#ef4444", radius: 14, glow: "#ef4444" },
-  genre:       { color: "#f59e0b", radius: 12, glow: "#f59e0b" },
+const NODE_CONFIG: Record<string, { color: string; radius: number; glow: string; dashed?: boolean }> = {
+  user:           { color: "#00ff88", radius: 28, glow: "#00ff88" },
+  recommended:    { color: "#a855f7", radius: 20, glow: "#a855f7" },
+  liked:          { color: "#38bdf8", radius: 16, glow: "#38bdf8" },
+  movie_liked:    { color: "#38bdf8", radius: 16, glow: "#38bdf8" },
+  movie_session:  { color: "#fbbf24", radius: 16, glow: "#fbbf24", dashed: true },
+  movie_blocked:  { color: "#ef4444", radius: 14, glow: "#ef4444" },
+  erased:         { color: "#ef4444", radius: 14, glow: "#ef4444" },
+  genre:          { color: "#c084fc", radius: 12, glow: "#c084fc" },
+  genre_blocked:  { color: "#ef4444", radius: 12, glow: "#ef4444" },
 };
 
-const EDGE_CONFIG = {
-  recommends: { color: "#a855f7", opacity: 0.8 },
-  liked:      { color: "#38bdf8", opacity: 0.5 },
-  erased:     { color: "#ef4444", opacity: 0.3 },
-  has_genre:  { color: "#f59e0b", opacity: 0.3 },
+const EDGE_CONFIG: Record<string, { color: string; opacity: number; dashed?: boolean }> = {
+  recommends:           { color: "#a855f7", opacity: 0.8 },
+  liked:                { color: "#38bdf8", opacity: 0.5 },
+  permanent_like:       { color: "#38bdf8", opacity: 0.55 },
+  session_interaction:  { color: "#fbbf24", opacity: 0.55, dashed: true },
+  blocked:              { color: "#ef4444", opacity: 0.3 },
+  erased:               { color: "#ef4444", opacity: 0.3 },
+  has_genre:            { color: "#c084fc", opacity: 0.3 },
+  genre_weight:         { color: "#c084fc", opacity: 0.3 },
 };
 
 function runForceLayout(nodes: GraphNode[], edges: GraphEdge[], width: number, height: number, iterations: number = 200) {
@@ -165,7 +197,13 @@ export function GnnVisualizer({ graphData, onClose }: Props) {
       ctx.strokeStyle = gradient;
       ctx.lineWidth = Math.max(0.5, edge.weight * 2.5);
       ctx.globalAlpha = cfg.opacity;
+      if (cfg.dashed) {
+        ctx.setLineDash([4, 4]);
+      } else {
+        ctx.setLineDash([]);
+      }
       ctx.stroke();
+      ctx.setLineDash([]);
 
       // Edge weight label
       if (edge.type === "recommends" && edge.weight > 0.1) {
@@ -208,13 +246,18 @@ export function GnnVisualizer({ graphData, onClose }: Props) {
       ctx.fillStyle = nodeGrad;
       ctx.fill();
 
-      // Border
-      ctx.strokeStyle = node.type === "erased" ? "#ef4444" : "#ffffff33";
+      // Border (dashed for session nodes, red for blocked, white otherwise)
+      const blocked = node.type === "erased" || node.type === "movie_blocked" || node.type === "genre_blocked";
+      ctx.strokeStyle = blocked ? "#ef4444" : "#ffffff33";
       ctx.lineWidth = isHovered ? 2 : 1;
+      if (cfg.dashed) {
+        ctx.setLineDash([4, 3]);
+      }
       ctx.stroke();
+      ctx.setLineDash([]);
 
-      // Erased: strikethrough
-      if (node.type === "erased") {
+      // Erased/blocked: strikethrough
+      if (blocked) {
         ctx.beginPath();
         ctx.moveTo(node.x - r, node.y!);
         ctx.lineTo(node.x + r, node.y!);
@@ -283,7 +326,7 @@ export function GnnVisualizer({ graphData, onClose }: Props) {
 
     for (const node of nodesRef.current) {
       if (!node.x) continue;
-      const cfg = NODE_CONFIG[node.type];
+      const cfg = NODE_CONFIG[node.type] || NODE_CONFIG.recommended;
       const dx = cx - node.x, dy = cy - node.y!;
       if (dx * dx + dy * dy < cfg.radius * cfg.radius * 1.5) return node;
     }
@@ -454,7 +497,7 @@ export function GnnVisualizer({ graphData, onClose }: Props) {
             <div className="flex items-center gap-2 mt-0.5">
               <div
                 className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: NODE_CONFIG[hoveredNode.type]?.color }}
+                style={{ backgroundColor: (NODE_CONFIG[hoveredNode.type] || NODE_CONFIG.recommended).color }}
               />
               <span className="text-white/50 text-xs capitalize">{hoveredNode.type}</span>
               {hoveredNode.weight > 0 && (
