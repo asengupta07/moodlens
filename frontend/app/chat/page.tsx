@@ -285,6 +285,8 @@ export default function ChatPage() {
         timestamp: new Date().toISOString(),
         cosine_distance: drift.cosine_distance,
         edges_processed: drift.edges_processed,
+        reversion_score: drift.reversion_score,
+        non_destructive: drift.non_destructive,
         mood: summary?.dominant_mood ?? null,
         mode: drift.mode ?? "discard",
       });

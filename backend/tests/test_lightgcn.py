@@ -104,6 +104,7 @@ def test_influence_commit_then_erase_roundtrip():
     with torch.no_grad():
         before = m.propagate(su.edge_index)[0].clone()
     session = [(0, "5", 1.0), (0, "7", 1.0)]
+    original_edge_count = su.edge_index.shape[1]
     su.commit_session(session, user_id=0, num_steps=10, lr=5e-3)
     with torch.no_grad():
         after_commit = m.propagate(su.edge_index)[0].clone()
@@ -117,8 +118,9 @@ def test_influence_commit_then_erase_roundtrip():
     drift_erase = 1.0 - torch.nn.functional.cosine_similarity(
         before.unsqueeze(0), after_erase.unsqueeze(0)
     ).item()
-    # erase should leave drift smaller than the commit drift (reversion direction)
-    print(f"drift_commit={drift_commit:.4f}  drift_erase={drift_erase:.4f}")
+    assert su.edge_index.shape[1] == original_edge_count
+    assert drift_commit > 0.0
+    assert drift_erase < 1e-5, f"erase did not restore baseline: {drift_erase:.8f}"
 
 
 if __name__ == "__main__":

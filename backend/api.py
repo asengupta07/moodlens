@@ -413,12 +413,21 @@ async def chat(req: ChatRequest):
         # ── LightGCN scores for the live user ─────────────────────────────────
         gcn_scores = None
         if mgr.lightgcn is not None:
+            session_user_embedding = None
+            if mgr.session_unlearner is not None and mgr.session_graph.is_active():
+                session_edges = mgr.session_graph.get_edges_for_user(mgr.lightgcn_user_id)
+                if session_edges:
+                    session_user_embedding = mgr.session_unlearner.preview_session_embedding(
+                        session_edges,
+                        mgr.lightgcn_user_id,
+                    )
             gcn_scores = compute_lightgcn_scores(
                 model=mgr.lightgcn,
                 edge_index=mgr.edge_index,
                 user_id=mgr.lightgcn_user_id,
                 movie_db=movie_db,
                 item_map=mgr.item_map,
+                user_embedding=session_user_embedding,
             )
 
         recommendations = score_and_recommend(

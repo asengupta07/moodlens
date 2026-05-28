@@ -1,6 +1,6 @@
 "use client";
 
-import { History, Sparkles, Trash2 } from "lucide-react";
+import { CheckCircle2, History, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 
 export interface DriftEvent {
   tier: number;
@@ -14,6 +14,8 @@ export interface DriftEvent {
   retain_score?: number;
   mood?: string | null;
   mode?: string;
+  reversion_score?: number;
+  non_destructive?: boolean;
 }
 
 interface Props {
@@ -55,6 +57,9 @@ export function UnlearningPanel({ lastEvent }: Props) {
   const isTier1 = lastEvent.tier === 1;
   const Icon = isTier1 ? Trash2 : Sparkles;
   const color = isTier1 ? "var(--wine)" : "var(--amber)";
+  const isCleanSessionErase = !isTier1 && (
+    lastEvent.non_destructive || (lastEvent.reversion_score ?? 0) >= 0.98
+  );
 
   return (
     <section className="mood-panel p-4">
@@ -75,8 +80,23 @@ export function UnlearningPanel({ lastEvent }: Props) {
       <p className="mt-3 text-xs leading-6 text-[var(--ink-2)]">
         {isTier1
           ? "This is the size of the embedding shift caused by permanent unlearning. Bigger usually means the forgotten region actually moved."
-          : "This is how much the user vector changed while clearing the temporary mood. It is a before/after trace, not a rating."}
+          : "This is the measured mood rollback. Discarding a live session clears the temporary ranking vector without writing to the permanent checkpoint."}
       </p>
+
+      {!isTier1 && (
+        <div className="mt-3 flex items-start gap-2 border border-[rgba(216,168,74,0.28)] bg-[rgba(216,168,74,0.07)] p-3 text-xs leading-5 text-[var(--ink-2)]">
+          {isCleanSessionErase ? (
+            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-[var(--green)]" />
+          ) : (
+            <ShieldCheck size={15} className="mt-0.5 shrink-0 text-[var(--amber)]" />
+          )}
+          <span>
+            {isCleanSessionErase
+              ? "Clean session boundary: the mood was removed without residual profile drift."
+              : "Session boundary recorded. Check reversion and residual drift before claiming a clean erase."}
+          </span>
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--rule)] pt-4 text-xs">
         {isTier1 ? (
@@ -91,7 +111,8 @@ export function UnlearningPanel({ lastEvent }: Props) {
             <Metric label="Mood" value={lastEvent.mood ?? "-"} />
             <Metric label="Edges" value={lastEvent.edges_processed ?? "-"} />
             <Metric label="Mode" value={lastEvent.mode ?? "-"} />
-            <Metric label="Event" value="Influence erase" />
+            <Metric label="Reversion" value={fmt(lastEvent.reversion_score)} />
+            <Metric label="Write" value={lastEvent.non_destructive ? "No checkpoint write" : "Model update"} />
           </>
         )}
       </div>

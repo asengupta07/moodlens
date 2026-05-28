@@ -19,9 +19,9 @@ const HEIGHT = 112;
 const PAD_X = 24;
 const PAD_Y = 16;
 
-function buildPath(values: number[]): string {
+function buildPath(values: number[], maxValue: number): string {
   if (values.length === 0) return "";
-  const max = Math.max(0.01, ...values);
+  const max = Math.max(0.01, maxValue);
   const stepX = values.length > 1 ? (WIDTH - PAD_X * 2) / (values.length - 1) : 0;
   return values
     .map((v, i) => {
@@ -35,8 +35,9 @@ function buildPath(values: number[]): string {
 export function EmbeddingDriftChart({ permanent, session }: Props) {
   const permVals = permanent.map((p) => p.cosine_distance ?? 0);
   const sessVals = session.map((p) => p.cosine_distance ?? 0);
-  const permPath = useMemo(() => buildPath(permVals), [permVals]);
-  const sessPath = useMemo(() => buildPath(sessVals), [sessVals]);
+  const maxValue = Math.max(0.01, ...permVals, ...sessVals);
+  const permPath = useMemo(() => buildPath(permVals, maxValue), [permVals, maxValue]);
+  const sessPath = useMemo(() => buildPath(sessVals, maxValue), [sessVals, maxValue]);
   const empty = permVals.length === 0 && sessVals.length === 0;
 
   return (
@@ -85,23 +86,24 @@ export function EmbeddingDriftChart({ permanent, session }: Props) {
           ))}
           {permPath && <path d={permPath} fill="none" stroke="var(--wine)" strokeWidth={2} />}
           {sessPath && <path d={sessPath} fill="none" stroke="var(--amber)" strokeWidth={2} strokeDasharray="5 4" />}
-          {[...permVals.map((v, i) => ({ v, i, c: "var(--wine)" })), ...sessVals.map((v, i) => ({ v, i, c: "var(--amber)", s: sessVals.length }))].map((p, idx) => {
+          {[...permVals.map((v, i) => ({ v, i, c: "var(--wine)", label: permanent[i]?.event_type ?? "Tier I" })), ...sessVals.map((v, i) => ({ v, i, c: "var(--amber)", label: session[i]?.event_type ?? "Tier II" }))].map((p, idx) => {
             const values = p.c === "var(--wine)" ? permVals : sessVals;
             const stepX = values.length > 1 ? (WIDTH - PAD_X * 2) / (values.length - 1) : 0;
-            const max = Math.max(0.01, ...values);
             return (
               <circle
                 key={idx}
                 cx={PAD_X + stepX * p.i}
-                cy={HEIGHT - PAD_Y - (p.v / max) * (HEIGHT - PAD_Y * 2)}
+                cy={HEIGHT - PAD_Y - (p.v / maxValue) * (HEIGHT - PAD_Y * 2)}
                 r={3}
                 fill={p.c}
-              />
+              >
+                <title>{`${p.label}: ${p.v.toFixed(4)}`}</title>
+              </circle>
             );
           })}
         </svg>
         <p className="mt-2 text-[11px] leading-5 text-[var(--clay)]">
-          Red: permanent profile surgery. Amber: temporary mood clearing.
+          Red: permanent profile surgery. Amber: temporary mood clearing. Both lines use the same vertical scale.
         </p>
         </div>
       )}

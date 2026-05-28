@@ -3,9 +3,10 @@ influence.py — Tier 2 session unlearning via influence functions
 (Koh & Liang, ICML 2017).
 
 The session graph is treated as a small set of additional user→movie edges.
-We approximate the influence of those edges on the user's embedding using a
-first-order Taylor expansion of the inverse Hessian-vector product (LiSSA
-truncation depth 1; sufficient for the small per-session perturbation).
+For committed sessions we record the pre-session state, then erase by applying
+the exact inverse of that session perturbation: remove the temporary topology
+and restore the pre-session embedding table. When no session snapshot exists,
+we fall back to the first-order influence approximation.
 
 erase_session    → subtract the influence (revert user embedding toward
                    pre-session state).
@@ -16,6 +17,7 @@ commit_session   → run a short fine-tune over the session edges, merging
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 
@@ -28,14 +30,20 @@ class SessionMetrics:
     user_embedding_before: list[float]
     user_embedding_after: list[float]
     edges_processed: int
+    reversion_score: float | None = None
+    non_destructive: bool = False
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "cosine_distance": float(self.cosine_distance),
             "before_vector": list(self.user_embedding_before),
             "after_vector": list(self.user_embedding_after),
             "edges_processed": int(self.edges_processed),
+            "non_destructive": bool(self.non_destructive),
         }
+        if self.reversion_score is not None:
+            data["reversion_score"] = float(self.reversion_score)
+        return data
 
 
 class SessionUnlearner:
@@ -50,6 +58,7 @@ class SessionUnlearner:
         self.edge_index = edge_index.to(device)
         self.item_map = item_map
         self.device = device
+        self._snapshots: dict[tuple[Any, ...], dict[str, torch.Tensor]] = {}
 
     # ── Helpers ────────────────────────────────────────────────────────────────
     def _resolve(self, session_edges: list[tuple]) -> list[tuple[int, int, float]]:
@@ -67,6 +76,16 @@ class SessionUnlearner:
             out.append((int(u), self.item_map[key], float(w)))
         return out
 
+    def _session_key(
+        self, session_edges: list[tuple], user_id: int,
+    ) -> tuple[Any, ...]:
+        """Stable key for matching a commit with its later discard/partial erase."""
+        edges = self._resolve(session_edges)
+        return (
+            int(user_id),
+            tuple(sorted((u, m, round(w, 6)) for u, m, w in edges)),
+        )
+
     def _user_emb(self, user_id: int) -> torch.Tensor:
         with torch.no_grad():
             emb = self.model.propagate(self.edge_index)
@@ -77,6 +96,62 @@ class SessionUnlearner:
         a_n = torch.nn.functional.normalize(a, dim=-1)
         b_n = torch.nn.functional.normalize(b, dim=-1)
         return 1.0 - float((a_n * b_n).sum().item())
+
+    def _positive_edges(self, edges: list[tuple[int, int, float]]) -> list[tuple[int, int, float]]:
+        """Commit only positive session evidence into the graph."""
+        return [e for e in edges if e[2] > 0]
+
+    def has_session_snapshot(self, session_edges: list[tuple], user_id: int) -> bool:
+        return self._session_key(session_edges, user_id) in self._snapshots
+
+    def preview_session_embedding(
+        self,
+        session_edges: list[tuple],
+        user_id: int,
+        strength: float = 0.35,
+    ) -> torch.Tensor:
+        """
+        Return a temporary, non-mutating user embedding shaped by session edges.
+
+        This is the live Tier 2 recommendation state: mood can steer ranking
+        without touching the durable LightGCN parameters. Positive weights pull
+        the user vector toward session movies; negative weights push away.
+        """
+        edges = self._resolve(session_edges)
+        base = self._user_emb(self.model.user_idx(user_id))
+        if not edges:
+            return base
+
+        with torch.no_grad():
+            emb = self.model.propagate(self.edge_index)
+            movie_ids = torch.tensor([e[1] for e in edges], dtype=torch.long, device=self.device)
+            weights = torch.tensor([e[2] for e in edges], dtype=torch.float32, device=self.device)
+            movie_vecs = emb[self.model.num_users + movie_ids]
+            denom = weights.abs().sum().clamp_min(1e-6)
+            target = (movie_vecs * weights.unsqueeze(1)).sum(dim=0) / denom
+            return base + float(strength) * (target - base)
+
+    def discard_active_session(
+        self,
+        session_edges: list[tuple],
+        user_id: int,
+    ) -> SessionMetrics:
+        """
+        Clear an active, uncommitted mood without mutating model parameters.
+
+        The before vector is the session-conditioned preview used for live
+        ranking; the after vector is the durable profile embedding.
+        """
+        before = self.preview_session_embedding(session_edges, user_id)
+        after = self._user_emb(self.model.user_idx(user_id))
+        return SessionMetrics(
+            cosine_distance=self._cosine(before, after),
+            user_embedding_before=before.tolist(),
+            user_embedding_after=after.tolist(),
+            edges_processed=len(self._resolve(session_edges)),
+            reversion_score=1.0,
+            non_destructive=True,
+        )
 
     # ── Influence approximation ───────────────────────────────────────────────
     def compute_session_influence(
@@ -92,6 +167,14 @@ class SessionUnlearner:
         edges = self._resolve(session_edges)
         if not edges:
             return torch.zeros(self.model.embedding_dim, device=self.device)
+
+        key = self._session_key(session_edges, user_id)
+        snapshot = self._snapshots.get(key)
+        if snapshot is not None:
+            row = self.model.user_idx(user_id)
+            current = self.model.embedding.weight[row].detach()
+            original = snapshot["embedding_weight"][row].to(self.device)
+            return current - original
 
         users = torch.tensor([e[0] for e in edges], dtype=torch.long, device=self.device)
         pos = torch.tensor([e[1] for e in edges], dtype=torch.long, device=self.device)
@@ -122,10 +205,26 @@ class SessionUnlearner:
         """
         scale = 1.0 if mode == "discard" else 0.7 if mode == "partial" else float(step)
         before = self._user_emb(self.model.user_idx(user_id))
-        influence = self.compute_session_influence(session_edges, user_id)
-        # Subtract influence directly from the BASE embedding row in place
-        with torch.no_grad():
-            self.model.embedding.weight[self.model.user_idx(user_id)] -= scale * influence
+
+        key = self._session_key(session_edges, user_id)
+        snapshot = self._snapshots.pop(key, None) if mode == "discard" else self._snapshots.get(key)
+        if snapshot is not None:
+            with torch.no_grad():
+                if mode == "discard":
+                    # Exact inverse of the session fine-tune: remove appended session
+                    # edges and restore the pre-session embedding table.
+                    self.model.embedding.weight.copy_(snapshot["embedding_weight"].to(self.device))
+                    self.edge_index = snapshot["edge_index"].to(self.device)
+                else:
+                    original = snapshot["embedding_weight"].to(self.device)
+                    current = self.model.embedding.weight.detach()
+                    self.model.embedding.weight.copy_(original + (1.0 - scale) * (current - original))
+                    self.edge_index = snapshot["edge_index"].to(self.device)
+        else:
+            influence = self.compute_session_influence(session_edges, user_id)
+            with torch.no_grad():
+                self.model.embedding.weight[self.model.user_idx(user_id)] -= scale * influence
+
         after = self._user_emb(self.model.user_idx(user_id))
         return SessionMetrics(
             cosine_distance=self._cosine(before, after),
@@ -147,8 +246,19 @@ class SessionUnlearner:
             v = self._user_emb(self.model.user_idx(user_id))
             return SessionMetrics(0.0, v.tolist(), v.tolist(), 0)
 
-        users = torch.tensor([e[0] for e in edges], dtype=torch.long, device=self.device)
-        pos = torch.tensor([e[1] for e in edges], dtype=torch.long, device=self.device)
+        positive_edges = self._positive_edges(edges)
+        if not positive_edges:
+            v = self._user_emb(self.model.user_idx(user_id))
+            return SessionMetrics(0.0, v.tolist(), v.tolist(), 0)
+
+        key = self._session_key(session_edges, user_id)
+        self._snapshots[key] = {
+            "embedding_weight": self.model.embedding.weight.detach().clone().cpu(),
+            "edge_index": self.edge_index.detach().clone().cpu(),
+        }
+
+        users = torch.tensor([e[0] for e in positive_edges], dtype=torch.long, device=self.device)
+        pos = torch.tensor([e[1] for e in positive_edges], dtype=torch.long, device=self.device)
 
         before = self._user_emb(self.model.user_idx(user_id))
         # Only optimise the base embedding table — full param works fine for tiny session
@@ -170,5 +280,5 @@ class SessionUnlearner:
             cosine_distance=self._cosine(before, after),
             user_embedding_before=before.tolist(),
             user_embedding_after=after.tolist(),
-            edges_processed=len(edges),
+            edges_processed=len(positive_edges),
         )

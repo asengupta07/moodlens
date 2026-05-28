@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import shutil
 from pathlib import Path
 
 import torch
@@ -24,6 +25,12 @@ CKPT = ROOT / "models" / "checkpoints" / "lightgcn_best.pt"
 
 def _tmp(name: str) -> str:
     return str(Path(tempfile.gettempdir()) / name)
+
+
+def _tmp_ckpt(name: str) -> str:
+    dst = Path(tempfile.gettempdir()) / name
+    shutil.copy2(CKPT, dst)
+    return str(dst)
 
 
 def test_state_manager_loads_checkpoint():
@@ -45,7 +52,7 @@ def test_state_manager_loads_checkpoint():
 def test_compute_lightgcn_scores_pipeline():
     state_path = _tmp("mt_state2.json")
     sess_path = _tmp("mt_session2.json")
-    mgr = StateManager(state_path, sess_path, str(CKPT))
+    mgr = StateManager(state_path, sess_path, _tmp_ckpt("mt_lightgcn3.pt"))
     movie_db = build_movie_db(
         str(DATA_DIR / "movies_metadata.csv"),
         str(DATA_DIR / "credits.csv"),
@@ -135,9 +142,15 @@ def test_state_manager_session_lifecycle():
             weight=1.0, genres=list(row["genres_list"]),
         )
     assert mgr.session_graph.is_active()
+    before_weight = {k: v.detach().clone() for k, v in mgr.lightgcn.state_dict().items()}
+    before_edges = mgr.edge_index.detach().clone()
     result = mgr.trigger_session_end("discard")
     assert "metrics" in result
     assert not mgr.session_graph.is_active()
+    assert result["metrics"]["non_destructive"] is True
+    assert torch.equal(before_edges, mgr.edge_index)
+    for key, value in mgr.lightgcn.state_dict().items():
+        assert torch.equal(before_weight[key], value), f"discard mutated model parameter {key}"
     print(f"✓ session discard: cos={result['metrics']['cosine_distance']:.4f}")
 
 

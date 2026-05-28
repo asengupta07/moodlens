@@ -390,19 +390,39 @@ class StateManager:
 
         if mode == "commit":
             metrics = self.session_unlearner.commit_session(edges, self.lightgcn_user_id)
+            for it in self.session_graph.state.get("interactions", []):
+                if it.get("type") not in ("liked", "recommended"):
+                    continue
+                if float(it.get("weight", 0.0)) <= 0:
+                    continue
+                self.preference_graph.add_like(
+                    it.get("movie_id", ""),
+                    it.get("title", ""),
+                    list(it.get("genres", [])),
+                    engagement=float(it.get("weight", 1.0)),
+                )
             event = "session_commit"
         else:
-            metrics = self.session_unlearner.erase_session(
-                edges, self.lightgcn_user_id, mode="discard",
-            )
+            if self.session_unlearner.has_session_snapshot(edges, self.lightgcn_user_id):
+                metrics = self.session_unlearner.erase_session(
+                    edges, self.lightgcn_user_id, mode="discard",
+                )
+            else:
+                metrics = self.session_unlearner.discard_active_session(
+                    edges, self.lightgcn_user_id,
+                )
             event = "session_discard"
+        self.edge_index = self.session_unlearner.edge_index
+        if self.gnn_delete is not None:
+            self.gnn_delete.edge_index = self.edge_index
         self.session_graph.clear()
         m = metrics.to_dict()
         m["mode"] = mode
         m["mood"] = summary.get("dominant_mood")
         self.preference_graph.record_drift(tier=2, event_type=event, payload=m)
         self.preference_graph.save()
-        self._save_checkpoint()
+        if not getattr(metrics, "non_destructive", False):
+            self._save_checkpoint()
         return {"metrics": m, "session_summary": summary}
 
     # ── Misc helpers ──────────────────────────────────────────────────────────

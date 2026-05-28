@@ -7,6 +7,9 @@ import { Bookmark, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 interface SessionSummary {
   movie_count?: number;
   liked_count?: number;
+  positive_count?: number;
+  negative_count?: number;
+  mood_confidence?: number;
   dominant_mood?: string | null;
   duration_minutes?: number;
 }
@@ -14,6 +17,8 @@ interface SessionSummary {
 interface DriftMetrics {
   cosine_distance?: number;
   edges_processed?: number;
+  reversion_score?: number;
+  non_destructive?: boolean;
   mode?: string;
 }
 
@@ -83,7 +88,7 @@ export function NewMoodButton({ active, movieCount, mood, onCleared }: Props) {
                     End this mood?
                   </h3>
                   <p className="mt-3 max-w-md text-sm leading-6 text-[var(--ink-2)]">
-                    Choose whether this session becomes part of your permanent taste graph or is erased through Tier II unlearning.
+                    Choose whether this session becomes part of your permanent taste graph. Discarding clears the temporary ranking vector without writing to the checkpoint.
                   </p>
                 </div>
                 <button
@@ -128,7 +133,7 @@ export function NewMoodButton({ active, movieCount, mood, onCleared }: Props) {
                     Forget this mood
                   </div>
                   <p className="mt-3 text-sm leading-6 text-[var(--ink-2)]">
-                    Reverse the session influence and clear the mood graph.
+                    Roll back this mood boundary and leave long-term taste unchanged.
                   </p>
                 </button>
                 <button
@@ -141,7 +146,7 @@ export function NewMoodButton({ active, movieCount, mood, onCleared }: Props) {
                     Keep in my profile
                   </div>
                   <p className="mt-3 text-sm leading-6 text-[var(--ink-2)]">
-                    Merge the session interactions into permanent preference state.
+                    Fine-tune LightGCN and promote positive session signals into identity memory.
                   </p>
                 </button>
               </div>

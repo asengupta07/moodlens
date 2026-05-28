@@ -382,6 +382,7 @@ def compute_lightgcn_scores(
     user_id: int,
     movie_db: pd.DataFrame,
     item_map: dict[str, int],
+    user_embedding=None,
 ) -> dict[int, float]:
     """
     Batch-score every movie row against `user_id`'s embedding.
@@ -393,7 +394,7 @@ def compute_lightgcn_scores(
     model.eval()
     with torch.no_grad():
         emb = model.propagate(edge_index)
-        user_vec = emb[user_id]
+        user_vec = user_embedding.to(emb.device) if user_embedding is not None else emb[user_id]
         # Scores for ALL movies
         movie_emb = emb[model.num_users : model.num_users + model.num_movies]
         scores_all = (movie_emb @ user_vec).cpu().numpy()

@@ -115,9 +115,18 @@ class SessionGraph:
         if self.state.get("start_ts"):
             mins = max(0, int((_now_ts() - self.state["start_ts"]) / 60))
         liked = sum(1 for i in self.state["interactions"] if i["type"] == "liked")
+        positive = sum(1 for i in self.state["interactions"] if i["type"] in ("recommended", "liked"))
+        negative = sum(1 for i in self.state["interactions"] if i["type"] in ("skipped", "disliked"))
+        confidence = 0.0
+        total = positive + negative
+        if total:
+            confidence = round(abs(positive - negative) / total, 4)
         return {
             "movie_count": len(self.state["interactions"]),
             "liked_count": liked,
+            "positive_count": positive,
+            "negative_count": negative,
+            "mood_confidence": confidence,
             "dominant_mood": self.state.get("detected_mood"),
             "duration_minutes": mins,
             "session_id": self.state.get("session_id"),
